@@ -222,7 +222,8 @@ def gerar_email(texto_bruto, dados):
         campos.append(f"Possui {dados['dependentes']} dependente(s)")
 
     nome_dest   = dados.get("nome_destinatario","") or "Ana"
-    nome_cliente = (dados.get("nome_completo","") or "").split()[0].capitalize() or "cliente"
+    _nome_completo = (dados.get("nome_completo","") or "").split()
+    nome_cliente = _nome_completo[0].capitalize() if _nome_completo else "cliente"
     valor_imovel = dados.get("valor_imovel","")
     tipo_imovel  = dados.get("tipo_imovel","") or "novo"
 
