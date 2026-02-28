@@ -19,6 +19,34 @@ from pathlib import Path
 # CONFIGURAÇÃO DA PÁGINA
 # ══════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════
+# LOGIN — CONTROLE DE ACESSO
+# ══════════════════════════════════════════════════════
+
+SENHA_ACESSO = "corretor2025"  # ← troque pela senha que quiser
+
+def check_login():
+    if not st.session_state.get("autenticado", False):
+        st.set_page_config(page_title="DocCorretor IA", page_icon="📁", layout="centered")
+        st.markdown("""
+        <style>
+        section[data-testid="stMain"] > div { max-width: 400px; margin: 80px auto; }
+        </style>
+        """, unsafe_allow_html=True)
+        st.markdown("## 🗂️ DocCorretor IA")
+        st.caption("Sistema de organização de documentos para financiamento")
+        st.divider()
+        senha = st.text_input("🔑 Senha de acesso", type="password")
+        if st.button("Entrar", use_container_width=True, type="primary"):
+            if senha == SENHA_ACESSO:
+                st.session_state["autenticado"] = True
+                st.rerun()
+            else:
+                st.error("Senha incorreta. Tente novamente.")
+        st.stop()
+
+check_login()
+
 st.set_page_config(
     page_title="DocCorretor IA",
     page_icon="📁",
@@ -474,12 +502,15 @@ if processar:
             tipo     = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
             arquivos_bytes.append((arq.name, conteudo, tipo))
 
-        with st.spinner("⏳ Processando documentos com IA... aguarde"):
-            pdfs_gerados = processar_documentos(arquivos_bytes)
-
-        with st.spinner("🔍 Extraindo dados e gerando email..."):
-            dados  = extrair_dados(texto_bruto, arquivos_bytes, pdfs_gerados)
-            gerado = gerar_email(texto_bruto, dados, pdfs_gerados)
+        barra = st.progress(0, text="📄 Lendo e organizando documentos...")
+        pdfs_gerados = processar_documentos(arquivos_bytes)
+        barra.progress(55, text="🔍 Extraindo dados do texto e documentos...")
+        dados = extrair_dados(texto_bruto, arquivos_bytes, pdfs_gerados)
+        barra.progress(80, text="✍️ Gerando email profissional...")
+        gerado = gerar_email(texto_bruto, dados, pdfs_gerados)
+        barra.progress(100, text="✅ Concluído!")
+        import time; time.sleep(0.5)
+        barra.empty()
 
         # Salva no session_state para persistir
         st.session_state["pdfs_gerados"] = pdfs_gerados
@@ -585,8 +616,12 @@ if st.session_state.get("processado"):
                     st.error("❌ Configure a senha de app na barra lateral.")
                 else:
                     try:
-                        with st.spinner("📧 Enviando email..."):
-                            enviar_email(selecionados, destino, remetente, senha, assunto_edit, corpo_edit)
+                        barra_env = st.progress(0, text="📧 Conectando ao Gmail...")
+                        import time as _t; _t.sleep(0.3)
+                        barra_env.progress(40, text="📤 Anexando arquivos...")
+                        enviar_email(selecionados, destino, remetente, senha, assunto_edit, corpo_edit)
+                        barra_env.progress(100, text="✅ Email enviado!")
+                        _t.sleep(0.5); barra_env.empty()
                         st.success(f"✅ Email enviado para {destino} com {len(selecionados)} arquivo(s)!")
                     except smtplib.SMTPAuthenticationError:
                         st.error("❌ Autenticação falhou! Use senha de APP do Gmail.\nmyaccount.google.com → Segurança → Senhas de app")
