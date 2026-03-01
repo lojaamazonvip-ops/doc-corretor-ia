@@ -229,7 +229,7 @@ st.markdown("""
 
     /* Esconder menu hamburguer, botão Fork e GitHub */
     #MainMenu { visibility: hidden !important; display: none !important; }
-    header { visibility: hidden !important; }
+    header { visibility: hidden !important; display: none !important; }
     header[data-testid="stHeader"] { visibility: hidden !important; display: none !important; }
     footer { visibility: hidden !important; display: none !important; }
     .stDeployButton { display: none !important; }
@@ -237,13 +237,52 @@ st.markdown("""
     [data-testid="stDecoration"] { display: none !important; visibility: hidden !important; }
     [data-testid="stStatusWidget"] { display: none !important; }
     [data-testid="manage-app-button"] { display: none !important; }
-    .st-emotion-cache-zq5wmm { display: none !important; }
-    .st-emotion-cache-1dp5vir { display: none !important; }
     .viewerBadge_container__r5tak { display: none !important; }
     .styles_viewerBadge__CvC9N { display: none !important; }
     #stDecoration { display: none !important; }
     div[data-testid="collapsedControl"] { display: none !important; }
+    /* Streamlit Cloud badge */
+    [class*="viewerBadge"] { display: none !important; }
+    [class*="toolbarActions"] { display: none !important; }
+    [class*="ActionButton"] { display: none !important; }
+    button[title="View app in Streamlit Community Cloud"] { display: none !important; }
+    button[title="Open settings"] { display: none !important; }
+    button[title="Manage app"] { display: none !important; }
 </style>
+<script>
+    // Remove elementos do menu do Streamlit via JavaScript
+    function hideStreamlitMenu() {
+        // Seletores de elementos a remover
+        const selectors = [
+            'header[data-testid="stHeader"]',
+            '#MainMenu',
+            'footer',
+            '[data-testid="stToolbar"]',
+            '[data-testid="stDecoration"]',
+            '[data-testid="stStatusWidget"]',
+            '[data-testid="manage-app-button"]',
+            '.stDeployButton',
+            '[class*="viewerBadge"]',
+            '[class*="toolbarActions"]',
+        ];
+        selectors.forEach(sel => {
+            document.querySelectorAll(sel).forEach(el => {
+                el.style.display = 'none';
+                el.style.visibility = 'hidden';
+            });
+        });
+        // Remove botões do toolbar pelo título
+        ['Open settings','Manage app','View app in Streamlit Community Cloud','Fork'].forEach(title => {
+            document.querySelectorAll(`button[title="${title}"], a[title="${title}"]`).forEach(el => {
+                el.style.display = 'none';
+            });
+        });
+    }
+    // Roda imediatamente e também observa mudanças no DOM
+    hideStreamlitMenu();
+    const observer = new MutationObserver(hideStreamlitMenu);
+    observer.observe(document.body, { childList: true, subtree: true });
+</script>
 """, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════
