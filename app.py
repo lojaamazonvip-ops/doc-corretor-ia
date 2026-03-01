@@ -8,6 +8,8 @@ import time
 import smtplib
 import tempfile
 import zipfile
+import secrets
+from datetime import datetime, timedelta, timezone, date
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -30,11 +32,7 @@ EMAIL_REMETENTE = "daniellaandrade1989@gmail.com"
 EMAIL_SENHA_APP = "fpupijekoocowhcl"
 APP_URL_CLIENTE = "https://doc-corretor-ia.streamlit.app"  # ← URL do app cliente
 
-import smtplib
-import secrets
-from datetime import timezone
-from email.mime.text import MIMEText as _MIMEText
-from email.mime.multipart import MIMEMultipart as _MIMEMultipart
+
 
 def buscar_cliente(login, senha):
     # Busca só pelo login e verifica a senha no Python (evita problema com # e caracteres especiais na URL)
@@ -112,11 +110,11 @@ def enviar_link_recuperacao(email_destino, token):
     border-radius:6px;text-decoration:none;font-size:16px;">🔑 Redefinir Senha</a>
     <p style="color:#888;font-size:12px;">Se não solicitou, ignore este email.</p>
     """
-    msg = _MIMEMultipart("alternative")
+    msg = MIMEMultipart("alternative")
     msg["From"]    = EMAIL_REMETENTE
     msg["To"]      = email_destino
     msg["Subject"] = "DocCorretor IA — Recuperação de Senha"
-    msg.attach(_MIMEText(html, "html", "utf-8"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(EMAIL_REMETENTE, EMAIL_SENHA_APP)
         s.sendmail(EMAIL_REMETENTE, email_destino, msg.as_bytes())
