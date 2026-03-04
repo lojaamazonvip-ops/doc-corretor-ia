@@ -743,17 +743,17 @@ if st.session_state.get("processado"):
         st.markdown(f"""<a href="{LINK_MENSAL}" target="_blank" style="display:block;text-align:center;
             padding:12px;background:#1976d2;color:white;border-radius:8px;
             text-decoration:none;font-weight:bold;margin-bottom:8px;">
-            📅 Mensal — R$ 97,00</a>""", unsafe_allow_html=True)
+            📅 Mensal — R$ 97,00/mês</a>""", unsafe_allow_html=True)
 
         st.markdown(f"""<a href="{LINK_SEMESTRAL}" target="_blank" style="display:block;text-align:center;
             padding:12px;background:#388e3c;color:white;border-radius:8px;
             text-decoration:none;font-weight:bold;margin-bottom:8px;">
-            📆 Semestral — R$ 497,00</a>""", unsafe_allow_html=True)
+            📆 Semestral — R$ 83,00/mês</a>""", unsafe_allow_html=True)
 
         st.markdown(f"""<a href="{LINK_ANUAL}" target="_blank" style="display:block;text-align:center;
             padding:12px;background:#f57c00;color:white;border-radius:8px;
             text-decoration:none;font-weight:bold;margin-bottom:8px;">
-            🏆 Anual — R$ 897,00 &nbsp; ⭐ Mais escolhido</a>""", unsafe_allow_html=True)
+            🏆 Anual — R$ 75,00/mês &nbsp; ⭐ Mais escolhido</a>""", unsafe_allow_html=True)
         st.markdown("---")
     else:
         st.caption("Configure o email destino e seu Gmail na barra lateral antes de enviar.")
