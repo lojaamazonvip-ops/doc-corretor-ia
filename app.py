@@ -692,7 +692,7 @@ def enviar_email(pdfs_selecionados, destino, remetente, senha, assunto, corpo):
 # ══════════════════════════════════════════════════════
 
 exibir_logo(altura=320)
-st.markdown("<p style='text-align:center;margin-top:-15px;color:gray;font-size:14px;'>Organize, identifique e envie documentos imobiliários com IA</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align:center;margin-top:-120px;color:gray;font-size:14px;'>Organize, identifique e envie documentos imobiliários com IA</p>", unsafe_allow_html=True)
 
 # ── Banner contador de dias (só para FREE) ──
 _cliente_top = st.session_state.get("cliente", {})
