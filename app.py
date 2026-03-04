@@ -43,7 +43,59 @@ st.markdown("""
     [data-testid="stDecoration"]{display:none!important;}
     .stDeployButton{display:none!important;}
     a[href*="streamlit.io"]{display:none!important;}
+
+    /* Botão WhatsApp flutuante */
+    .whatsapp-float {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-decoration: none;
+    }
+    .whatsapp-float .wa-circle {
+        width: 58px;
+        height: 58px;
+        background: #25d366;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        transition: transform 0.2s;
+    }
+    .whatsapp-float:hover .wa-circle {
+        transform: scale(1.1);
+    }
+    .whatsapp-float .wa-circle svg {
+        width: 32px; height: 32px; fill: white;
+    }
+    .whatsapp-float .wa-label {
+        margin-top: 4px;
+        background: #25d366;
+        color: white;
+        font-size: 10px;
+        font-weight: bold;
+        padding: 2px 7px;
+        border-radius: 10px;
+        white-space: nowrap;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
 </style>
+
+<!-- Botão WhatsApp flutuante -->
+<a class="whatsapp-float"
+   href="https://wa.me/5581992952521?text=Ol%C3%A1!%20Tenho%20d%C3%BAvidas%20sobre%20o%20DocCorretor%20IA."
+   target="_blank">
+  <div class="wa-circle">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+      <path d="M16 0C7.163 0 0 7.163 0 16c0 2.822.738 5.476 2.027 7.784L0 32l8.418-2.004A15.938 15.938 0 0016 32c8.837 0 16-7.163 16-16S24.837 0 16 0zm0 29.333a13.27 13.27 0 01-6.77-1.848l-.485-.287-5.001 1.19 1.234-4.872-.317-.5A13.267 13.267 0 012.667 16C2.667 8.821 8.821 2.667 16 2.667S29.333 8.821 29.333 16 23.179 29.333 16 29.333zm7.274-9.874c-.398-.199-2.354-1.162-2.719-1.294-.365-.133-.631-.199-.897.199-.266.398-1.031 1.294-1.264 1.56-.232.266-.465.299-.863.1-.398-.199-1.681-.619-3.202-1.977-1.183-1.056-1.982-2.36-2.213-2.758-.232-.398-.025-.613.174-.811.179-.178.398-.465.597-.698.199-.232.266-.398.398-.664.133-.266.066-.499-.033-.698-.1-.199-.897-2.162-1.23-2.96-.323-.778-.652-.672-.897-.684l-.764-.013c-.266 0-.697.1-1.063.499-.365.398-1.395 1.362-1.395 3.323 0 1.961 1.428 3.856 1.627 4.122.199.266 2.81 4.29 6.808 5.016.952.163 1.695.261 2.274.334.955.121 1.824.104 2.512-.061.767-.183 2.354-.963 2.686-1.893.332-.93.332-1.727.232-1.893-.099-.166-.365-.266-.763-.465z"/>
+    </svg>
+  </div>
+  <span class="wa-label">Suporte e Dúvidas</span>
+</a>
 """, unsafe_allow_html=True)
 
 components.html("""
@@ -488,6 +540,25 @@ def enviar_email(pdfs_selecionados, destino, remetente, senha, assunto, corpo):
 
 st.title("📁 DocCorretor IA")
 st.caption("Organize, identifique e envie documentos imobiliários com IA")
+
+# ── Banner contador de dias (só para FREE) ──
+_cliente_top = st.session_state.get("cliente", {})
+_plano_top   = _cliente_top.get("plano","free")
+_venc_top    = _cliente_top.get("data_vencimento","")
+if _plano_top not in ("mensal","semestral","anual"):
+    try:
+        _dias = (date.fromisoformat(_venc_top) - date.today()).days
+        if _dias > 3:
+            st.info(f"🆓 **Teste gratuito** — ⏳ {_dias} dias restantes para expirar seu acesso.")
+        elif _dias > 0:
+            st.warning(f"⚠️ **Seu acesso expira em {_dias} dia(s)!** Faça upgrade agora para não perder o acesso.")
+        elif _dias == 0:
+            st.error("🚨 **Seu acesso expira HOJE!** Faça upgrade imediatamente.")
+        else:
+            st.error("❌ **Acesso expirado.** Faça upgrade para continuar usando o DocCorretor IA.")
+    except:
+        pass
+
 st.divider()
 
 with st.sidebar:
@@ -506,9 +577,9 @@ with st.sidebar:
             if dias_rest > 3:
                 st.warning(f"🆓 Teste gratuito\n⏳ **{dias_rest} dias restantes**")
             elif dias_rest > 0:
-                st.error(f"🆓 Teste gratuito\n🚨 **Apenas {dias_rest} dia(s) restante(s)!**\nSeu acesso expira em breve.")
+                st.error(f"🚨 **ATENÇÃO: {dias_rest} dia(s) restante(s)!**\nSeu acesso expira em breve.")
             else:
-                st.error("❌ **Acesso expirado!**\nFaça upgrade para continuar usando.")
+                st.error("❌ **Acesso expirado!**\nFaça upgrade para continuar.")
         except:
             st.caption("🆓 Plano Free")
 
