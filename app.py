@@ -8,6 +8,7 @@ import time
 import smtplib
 import tempfile
 import zipfile
+import io
 import secrets
 from datetime import datetime, timedelta, timezone, date
 from email.mime.multipart import MIMEMultipart
@@ -15,14 +16,9 @@ from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
 from PyPDF2 import PdfMerger
-from pathlib import Path
 
 # ══════════════════════════════════════════════════════
-# CONFIGURAÇÃO DA PÁGINA
-# ══════════════════════════════════════════════════════
-
-# ══════════════════════════════════════════════════════
-# LOGIN — SUPABASE
+# SUPABASE
 # ══════════════════════════════════════════════════════
 
 SUPABASE_URL    = "https://ryvgqesflxbtqbdhspdy.supabase.co"
@@ -30,43 +26,36 @@ SUPABASE_KEY    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIs
 SB_HEADERS      = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
 EMAIL_REMETENTE = "daniellaandrade1989@gmail.com"
 EMAIL_SENHA_APP = "fpupijekoocowhcl"
-APP_URL_CLIENTE = "https://doc-corretor-ia.streamlit.app"  # ← URL do app cliente
-
-
+APP_URL_CLIENTE = "https://doc-corretor-ia.streamlit.app"
 
 def buscar_cliente(login, senha):
-    # Busca só pelo login e verifica a senha no Python (evita problema com # e caracteres especiais na URL)
     url = f"{SUPABASE_URL}/rest/v1/clientes?login=eq.{login}&select=*"
-    r = requests.get(url, headers=SB_HEADERS)
-    if r.status_code != 200:
-        return None
+    r   = requests.get(url, headers=SB_HEADERS)
+    if r.status_code != 200: return None
     dados = r.json()
-    if not dados:
-        return None
+    if not dados: return None
     cliente = dados[0]
-    # Verifica senha localmente
-    if cliente.get("senha","").strip() == senha.strip():
-        return cliente
+    if cliente.get("senha","").strip() == senha.strip(): return cliente
     return None
 
 def buscar_cliente_por_email(email):
     url = f"{SUPABASE_URL}/rest/v1/clientes?email=eq.{email}&select=*"
-    r = requests.get(url, headers=SB_HEADERS)
+    r   = requests.get(url, headers=SB_HEADERS)
     dados = r.json()
     return dados[0] if dados else None
 
 def registrar_acesso(cliente):
     url = f"{SUPABASE_URL}/rest/v1/acessos"
     requests.post(url, headers={**SB_HEADERS,"Content-Type":"application/json"},
-                  json={"cliente_id": cliente["id"], "cliente_nome": cliente["nome"],
-                        "cliente_login": cliente["login"]})
+                  json={"cliente_id":cliente["id"],"cliente_nome":cliente["nome"],
+                        "cliente_login":cliente["login"]})
 
 def registrar_uso(cliente, qtd_arquivos=0, email_enviado=False):
     url = f"{SUPABASE_URL}/rest/v1/usos"
     requests.post(url, headers={**SB_HEADERS,"Content-Type":"application/json"},
-                  json={"cliente_id": cliente["id"], "cliente_nome": cliente["nome"],
-                        "cliente_login": cliente["login"], "qtd_arquivos": qtd_arquivos,
-                        "email_enviado": email_enviado})
+                  json={"cliente_id":cliente["id"],"cliente_nome":cliente["nome"],
+                        "cliente_login":cliente["login"],"qtd_arquivos":qtd_arquivos,
+                        "email_enviado":email_enviado})
 
 def criar_token_cliente(cliente_id):
     token  = secrets.token_urlsafe(32)
@@ -85,20 +74,19 @@ def validar_token_cliente(token):
     if not dados: return None
     rec    = dados[0]
     expira = datetime.fromisoformat(rec["expira_em"])
-    if expira.tzinfo is None:
-        expira = expira.replace(tzinfo=timezone.utc)
+    if expira.tzinfo is None: expira = expira.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) > expira: return None
     return rec
 
 def marcar_token_cliente_usado(token_id):
     url = f"{SUPABASE_URL}/rest/v1/tokens_recuperacao?id=eq.{token_id}"
     requests.patch(url, headers={**SB_HEADERS,"Content-Type":"application/json"},
-                   json={"usado": True})
+                   json={"usado":True})
 
 def alterar_senha_cliente(cliente_id, nova_senha):
     url = f"{SUPABASE_URL}/rest/v1/clientes?id=eq.{cliente_id}"
     requests.patch(url, headers={**SB_HEADERS,"Content-Type":"application/json"},
-                   json={"senha": nova_senha})
+                   json={"senha":nova_senha})
 
 def enviar_link_recuperacao(email_destino, token):
     link = f"{APP_URL_CLIENTE}?token={token}"
@@ -114,32 +102,29 @@ def enviar_link_recuperacao(email_destino, token):
     msg["From"]    = EMAIL_REMETENTE
     msg["To"]      = email_destino
     msg["Subject"] = "DocCorretor IA — Recuperação de Senha"
-    msg.attach(MIMEText(html, "html", "utf-8"))
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+    msg.attach(MIMEText(html,"html","utf-8"))
+    with smtplib.SMTP_SSL("smtp.gmail.com",465) as s:
         s.login(EMAIL_REMETENTE, EMAIL_SENHA_APP)
         s.sendmail(EMAIL_REMETENTE, email_destino, msg.as_bytes())
 
 SESSAO_CLIENTE_TOKEN = "sessao_cliente_ativa_2025"
 
 def check_login():
-    from datetime import date as _date
     params    = st.query_params
-    token_url = params.get("token", "")
-    sessao    = params.get("s", "")
+    token_url = params.get("token","")
+    sessao    = params.get("s","")
 
-    # ── Restaura sessão via query param após F5 ──
     if sessao == SESSAO_CLIENTE_TOKEN and not st.session_state.get("autenticado"):
-        login_salvo = params.get("u", "")
+        login_salvo = params.get("u","")
         if login_salvo:
             url = f"{SUPABASE_URL}/rest/v1/clientes?login=eq.{login_salvo}&select=*"
             r   = requests.get(url, headers=SB_HEADERS)
             if r.status_code == 200 and r.json():
                 cliente = r.json()[0]
-                if cliente.get("ativo") and _date.fromisoformat(cliente["data_vencimento"]) >= _date.today():
+                if cliente.get("ativo") and date.fromisoformat(cliente["data_vencimento"]) >= date.today():
                     st.session_state["autenticado"] = True
                     st.session_state["cliente"]     = cliente
 
-    # ── Redefinição via link ──
     if token_url and not st.session_state.get("autenticado"):
         st.set_page_config(page_title="DocCorretor IA", page_icon="📁", layout="centered")
         st.markdown("<style>section[data-testid='stMain'] > div{max-width:420px;margin:70px auto;}</style>",
@@ -149,23 +134,20 @@ def check_login():
         st.divider()
         rec = validar_token_cliente(token_url)
         if not rec or rec.get("tipo") != "cliente":
-            st.error("❌ Link inválido ou expirado. Solicite um novo na tela de login.")
+            st.error("❌ Link inválido ou expirado.")
             st.stop()
         nova1 = st.text_input("Nova senha", type="password")
         nova2 = st.text_input("Confirme a nova senha", type="password")
         if st.button("✅ Salvar nova senha", use_container_width=True, type="primary"):
-            if not nova1 or len(nova1) < 6:
-                st.error("Senha deve ter pelo menos 6 caracteres.")
-            elif nova1 != nova2:
-                st.error("As senhas não coincidem.")
+            if not nova1 or len(nova1) < 6: st.error("Senha deve ter pelo menos 6 caracteres.")
+            elif nova1 != nova2: st.error("As senhas não coincidem.")
             else:
                 alterar_senha_cliente(rec["referencia"], nova1)
                 marcar_token_cliente_usado(rec["id"])
-                st.success("✅ Senha redefinida com sucesso! Faça login normalmente.")
+                st.success("✅ Senha redefinida! Faça login normalmente.")
                 st.query_params.clear()
         st.stop()
 
-    # ── Login normal ──
     if not st.session_state.get("autenticado", False):
         st.set_page_config(page_title="DocCorretor IA", page_icon="📁", layout="centered")
         st.markdown("<style>section[data-testid='stMain'] > div{max-width:420px;margin:70px auto;}</style>",
@@ -173,18 +155,16 @@ def check_login():
         st.markdown("## 🗂️ DocCorretor IA")
         st.caption("Sistema de organização de documentos para financiamento")
         st.divider()
-        tela = st.radio("", ["🔑 Entrar", "🔓 Esqueci minha senha"], horizontal=True, label_visibility="collapsed")
+        tela = st.radio("", ["🔑 Entrar","🔓 Esqueci minha senha"], horizontal=True, label_visibility="collapsed")
 
         if tela == "🔑 Entrar":
             login = st.text_input("👤 Login")
             senha = st.text_input("🔑 Senha", type="password")
             if st.button("Entrar", use_container_width=True, type="primary"):
                 cliente = buscar_cliente(login.strip(), senha.strip())
-                if not cliente:
-                    st.error("Login ou senha incorretos.")
-                elif not cliente.get("ativo"):
-                    st.error("❌ Acesso bloqueado. Entre em contato com o suporte.")
-                elif _date.fromisoformat(cliente["data_vencimento"]) < _date.today():
+                if not cliente: st.error("Login ou senha incorretos.")
+                elif not cliente.get("ativo"): st.error("❌ Acesso bloqueado. Entre em contato com o suporte.")
+                elif date.fromisoformat(cliente["data_vencimento"]) < date.today():
                     st.error("❌ Sua assinatura venceu. Entre em contato para renovar.")
                 else:
                     st.session_state["autenticado"] = True
@@ -193,30 +173,28 @@ def check_login():
                     st.query_params["u"] = cliente["login"]
                     registrar_acesso(cliente)
                     st.rerun()
-
         else:
             st.info("Digite o email cadastrado na sua conta.")
             email_rec = st.text_input("📧 Email cadastrado")
             if st.button("📧 Enviar link de recuperação", use_container_width=True, type="primary"):
                 cliente = buscar_cliente_por_email(email_rec.strip())
-                if not cliente:
-                    st.error("Email não encontrado. Verifique ou entre em contato com o suporte.")
+                if not cliente: st.error("Email não encontrado.")
                 else:
                     try:
                         token = criar_token_cliente(cliente["id"])
                         enviar_link_recuperacao(email_rec.strip(), token)
-                        st.success(f"✅ Link enviado para {email_rec}! Verifique sua caixa de entrada. O link expira em 30 minutos.")
+                        st.success(f"✅ Link enviado para {email_rec}! Expira em 30 minutos.")
                     except Exception as e:
                         st.error(f"❌ Erro ao enviar email: {e}")
         st.stop()
 
 check_login()
 
-st.set_page_config(
-    page_title="DocCorretor IA",
-    page_icon="📁",
-    layout="centered"
-)
+# ══════════════════════════════════════════════════════
+# CONFIGURAÇÃO DA PÁGINA
+# ══════════════════════════════════════════════════════
+
+st.set_page_config(page_title="DocCorretor IA", page_icon="📁", layout="centered")
 
 st.markdown("""
 <style>
@@ -226,109 +204,41 @@ st.markdown("""
     .checklist-ok    { color: #2e7d32; font-weight: bold; }
     .checklist-falta { color: #c62828; font-weight: bold; }
     .checklist-aviso { color: #e65100; font-weight: bold; }
-
-    /* Esconder menu hamburguer, botão Fork e GitHub */
-    #MainMenu { visibility: hidden !important; display: none !important; }
-    header { visibility: hidden !important; display: none !important; }
-    header[data-testid="stHeader"] { visibility: hidden !important; display: none !important; }
-    footer { visibility: hidden !important; display: none !important; }
-    .stDeployButton { display: none !important; }
-    [data-testid="stToolbar"] { display: none !important; visibility: hidden !important; }
-    [data-testid="stDecoration"] { display: none !important; visibility: hidden !important; }
-    [data-testid="stStatusWidget"] { display: none !important; }
-    [data-testid="manage-app-button"] { display: none !important; }
-    .viewerBadge_container__r5tak { display: none !important; }
-    .styles_viewerBadge__CvC9N { display: none !important; }
-    #stDecoration { display: none !important; }
-    div[data-testid="collapsedControl"] { display: none !important; }
-    [class*="viewerBadge"] { display: none !important; }
-    [class*="toolbarActions"] { display: none !important; }
-    [class*="ActionButton"] { display: none !important; }
-    button[title="View app in Streamlit Community Cloud"] { display: none !important; }
-    button[title="Open settings"] { display: none !important; }
-    button[title="Manage app"] { display: none !important; }
-    /* Badge inferior direito */
-    a[href*="streamlit.io"] { display: none !important; }
-    img[src*="streamlit"] { display: none !important; }
-    [class*="badge"] { display: none !important; }
-    [class*="Badge"] { display: none !important; }
-    div[style*="position: fixed"] { display: none !important; }
-    div[style*="position:fixed"] { display: none !important; }
+    #MainMenu{visibility:hidden!important;display:none!important;}
+    header{visibility:hidden!important;display:none!important;}
+    footer{visibility:hidden!important;display:none!important;}
+    [data-testid="stToolbar"]{display:none!important;}
+    [data-testid="stDecoration"]{display:none!important;}
+    .stDeployButton{display:none!important;}
+    a[href*="streamlit.io"]{display:none!important;}
 </style>
 """, unsafe_allow_html=True)
 
-# Injeta JS via iframe para escapar da sandbox do Streamlit e esconder menu/header/footer
 import streamlit.components.v1 as components
 components.html("""
 <script>
-    function hideMenu() {
-        const doc = window.parent.document;
-        const sels = [
-            'header', '#MainMenu', 'footer',
-            '[data-testid="stToolbar"]',
-            '[data-testid="stDecoration"]',
-            '[data-testid="stStatusWidget"]',
-            '[data-testid="manage-app-button"]',
-            '.stDeployButton',
-        ];
-        sels.forEach(s => doc.querySelectorAll(s).forEach(el => {
-            el.style.setProperty('display','none','important');
-            el.style.setProperty('visibility','hidden','important');
-        }));
-        ['Open settings','Manage app','View app in Streamlit Community Cloud','Fork'].forEach(t => {
-            doc.querySelectorAll('button[title="'+t+'"],a[title="'+t+'"]').forEach(el => {
-                el.style.setProperty('display','none','important');
-            });
-        });
-        // Esconder badge inferior direito (icone do Streamlit)
-        doc.querySelectorAll('a[href*="streamlit"]').forEach(el => {
+function hideMenu(){
+    const doc=window.parent.document;
+    ['header','#MainMenu','footer','[data-testid="stToolbar"]',
+     '[data-testid="stDecoration"]','.stDeployButton'].forEach(s=>{
+        doc.querySelectorAll(s).forEach(el=>{
             el.style.setProperty('display','none','important');
         });
-        doc.querySelectorAll('img[src*="streamlit"]').forEach(el => {
-            let p = el.parentElement;
-            while(p && p !== doc.body) {
-                if(p.tagName === 'A' || p.style.position === 'fixed') {
-                    p.style.setProperty('display','none','important');
-                    break;
-                }
-                p = p.parentElement;
-            }
-        });
-        // Badge Streamlit Cloud e avatar do criador (seletores exatos do inspetor)
-        [
-            'a[href="https://streamlit.io/cloud"]',
-            'a[href*="streamlit.io/cloud"]',
-            '[class*="_viewerBadge"]',
-            '[class*="_profileContainer"]',
-            '[class*="_profilePreview"]',
-            '[data-testid="appCreatorAvatar"]',
-            'a[href*="share.streamlit.io/user"]',
-            'img[alt="App Creator Avatar"]',
-        ].forEach(s => {
-            doc.querySelectorAll(s).forEach(el => {
-                // Sobe até o container pai e esconde
-                let p = el;
-                for(let i = 0; i < 5; i++) {
-                    if(p && p !== doc.body) {
-                        p.style.setProperty('display','none','important');
-                        p = p.parentElement;
-                    }
-                }
-            });
-        });
-    }
-    hideMenu();
-    new MutationObserver(hideMenu).observe(
-        window.parent.document.body, {childList:true, subtree:true}
-    );
+    });
+    doc.querySelectorAll('a[href*="streamlit"]').forEach(el=>{
+        el.style.setProperty('display','none','important');
+    });
+}
+hideMenu();
+new MutationObserver(hideMenu).observe(window.parent.document.body,{childList:true,subtree:true});
 </script>
 """, height=0)
 
 # ══════════════════════════════════════════════════════
-# CHAVES API — lidas dos Secrets do Streamlit
+# CHAVES API
 # ══════════════════════════════════════════════════════
 
-API_KEYS = [k.strip() for k in st.secrets.get("GEMINI_KEYS", "").split(",") if k.strip()]
+API_KEYS = [k.strip() for k in st.secrets.get("GEMINI_KEYS","").split(",") if k.strip()]
 if not API_KEYS:
     st.error("⚠️ Chaves Gemini não configuradas. Vá em Settings → Secrets e adicione GEMINI_KEYS.")
     st.stop()
@@ -434,7 +344,7 @@ def chamar_gemini(lista_parts):
                 else: time.sleep(35)
             else: raise ValueError(f"Erro [{codigo}]: {msg}")
             continue
-        if 'candidates' not in rjson: raise ValueError(f"Resposta inesperada")
+        if 'candidates' not in rjson: raise ValueError("Resposta inesperada")
         return rjson['candidates'][0]['content']['parts'][0]['text']
     raise ValueError("❌ Todas as tentativas falharam.")
 
@@ -444,24 +354,12 @@ def chamar_gemini(lista_parts):
 # ══════════════════════════════════════════════════════
 
 def processar_documentos(arquivos_bytes):
-    """
-    arquivos_bytes: lista de (nome, bytes, tipo)
-    Retorna: lista de (nome_pdf, bytes_pdf)
-    """
     pdfs_finais = []
     tmp = tempfile.mkdtemp()
 
-    # Salva arquivos no temp
-    caminhos = {}
-    for nome, conteudo, _ in arquivos_bytes:
-        caminho = os.path.join(tmp, nome)
-        with open(caminho, "wb") as f: f.write(conteudo)
-        caminhos[nome] = caminho
+    imgs = [(n,c) for n,c,t in arquivos_bytes if t=="imagem"]
+    pdfs = [(n,c) for n,c,t in arquivos_bytes if t=="pdf"]
 
-    imgs  = [(n,c) for n,c,t in arquivos_bytes if t=="imagem"]
-    pdfs  = [(n,c) for n,c,t in arquivos_bytes if t=="pdf"]
-
-    # ── PDFs ──
     if pdfs:
         prompt = f"""
 Especialista em documentos imobiliários brasileiros.
@@ -469,7 +367,7 @@ Especialista em documentos imobiliários brasileiros.
 📋 BANCO: {BANCO_STR}
 🔄 VERIFIQUE FRENTE/VERSO E UNA: {FRENTE_VERSO_STR}
 NOMENCLATURA: TipoDocumento_NomeCompleto_Detalhe
-Ex: RG_Maria_Silva | Extrato_Bancario_Nubank_Jan2026 | Certidao_Nascimento_Pedro_Lima
+Ex: RG_Maria_Silva | Extrato_Bancario_Nubank_Jan2026
 Frente+Verso=mesmo grupo | Holerites meses diferentes=separados | RG e CPF=sempre separados
 RETORNE JSON: {{"grupos":[{{"pdf_final":"Nome","arquivos":["arq.pdf"],"observacao":"motivo"}}]}}
 """
@@ -481,14 +379,12 @@ RETORNE JSON: {{"grupos":[{{"pdf_final":"Nome","arquivos":["arq.pdf"],"observaca
                           {"inline_data":{"mime_type":"application/pdf","data":b64}}]
             resp  = chamar_gemini(parts)
             dados = json.loads(resp.replace('```json','').replace('```','').strip())
-
             vistos = {}
             for g in dados['grupos']:
                 limpo = []
                 for arq in g['arquivos']:
                     if arq not in vistos: vistos[arq]=g['pdf_final']; limpo.append(arq)
                 g['arquivos'] = limpo
-
             nomes_pdf = {n: c for n,c in pdfs}
             for g in dados['grupos']:
                 nome_final = f"{g['pdf_final']}.pdf"
@@ -508,7 +404,6 @@ RETORNE JSON: {{"grupos":[{{"pdf_final":"Nome","arquivos":["arq.pdf"],"observaca
         except Exception as e:
             st.warning(f"Erro ao agrupar PDFs: {e}")
 
-    # ── Imagens ──
     if imgs:
         parts = []
         for nome, conteudo in imgs:
@@ -537,7 +432,6 @@ RETORNE JSON: {{"grupos":[{{"pdf":"Nome","arquivos":["arq.jpg"]}}]}}
                 nome_pdf   = f"{g['pdf']}.pdf"
                 arqs_grupo = [n for n in g['arquivos'] if n in nomes_img]
                 if not arqs_grupo: continue
-                # Salva imagens no temp e converte
                 caminhos_tmp = []
                 for n in arqs_grupo:
                     p = os.path.join(tmp, n)
@@ -552,32 +446,40 @@ RETORNE JSON: {{"grupos":[{{"pdf":"Nome","arquivos":["arq.jpg"]}}]}}
 
 
 # ══════════════════════════════════════════════════════
-# BLOCO 3 — EXTRAÇÃO DE DADOS
+# BLOCO 3 — EXTRAÇÃO DE DADOS DE CONTATO (WHITELIST)
 # ══════════════════════════════════════════════════════
 
+# ⚠️ WHITELIST ESTRITA — apenas estes 4 campos são permitidos na extração.
+# Qualquer outro dado encontrado será descartado automaticamente.
+CAMPOS_CONTATO_PERMITIDOS = {"nome_completo", "pis_nis_nit", "telefone", "email"}
+
 def extrair_dados(texto_bruto, arquivos_bytes, pdfs_gerados):
+    """
+    Extrai SOMENTE: nome_completo, pis_nis_nit, telefone, email.
+    Whitelist estrita — nenhum outro campo é retornado.
+    """
     prompt = f"""
-Especialista em documentos imobiliários brasileiros.
-Extraia informações de DUAS FONTES:
-- Informação no TEXTO → usa do texto
-- Informação nos DOCUMENTOS → usa dos documentos
-- Nas DUAS → usa o mais completo
-- Não encontrou → deixa ""
+Você é um extrator de dados de documentos imobiliários brasileiros.
 
-TEXTO BRUTO:
-{texto_bruto}
+⚠️ WHITELIST ESTRITA — extraia SOMENTE estes 4 campos:
+1. nome_completo — nome completo do(s) participante(s)
+2. pis_nis_nit   — número PIS, NIS ou NIT
+3. telefone      — com DDD formatado: (00) 9 0000-0000
+4. email         — endereço de email
 
-EXTRAIA: nome_completo, cpf, rg, data_nascimento, email, telefone, nit_pis_nis,
-endereco, estado_civil, renda_valor, renda_tipo, renda_profissao, dependentes,
-banco, valor_imovel, tipo_imovel, nome_destinatario, nunca_trabalhou_carteira, observacoes
+🚫 PROIBIDO: CPF, RG, endereço, renda, banco, valor imóvel, estado civil, etc.
+🚫 Qualquer outro dado encontrado deve ser IGNORADO.
+
+FONTES:
+- TEXTO: {texto_bruto}
+- DOCUMENTOS: analisados abaixo
 
 RETORNE APENAS JSON:
 {{
-  "nome_completo":"","cpf":"","rg":"","data_nascimento":"",
-  "email":"","telefone":"","nit_pis_nis":"","endereco":"",
-  "estado_civil":"","renda_valor":"","renda_tipo":"","renda_profissao":"",
-  "dependentes":"","banco":"","valor_imovel":"","tipo_imovel":"",
-  "nome_destinatario":"","nunca_trabalhou_carteira":"","observacoes":""
+  "nome_completo": "",
+  "pis_nis_nit": "",
+  "telefone": "",
+  "email": ""
 }}
 """
     parts = [{"text": prompt}]
@@ -590,79 +492,203 @@ RETORNE APENAS JSON:
         parts += [{"text":f"DOCUMENTO: {nome}"},{"inline_data":{"mime_type":"application/pdf","data":b64}}]
     try:
         resp  = chamar_gemini(parts)
-        return json.loads(resp.replace('```json','').replace('```','').strip())
-    except: return {}
+        dados = json.loads(resp.replace('```json','').replace('```','').strip())
+        return validar_dados_contato(dados)
+    except:
+        return {k: "" for k in CAMPOS_CONTATO_PERMITIDOS}
+
+def validar_dados_contato(dados_brutos):
+    """
+    ⚠️ Remove qualquer campo fora da whitelist de contato.
+    Garante que SOMENTE os 4 campos autorizados cheguem ao texto.
+    """
+    return {campo: dados_brutos.get(campo, "") for campo in CAMPOS_CONTATO_PERMITIDOS}
 
 
 # ══════════════════════════════════════════════════════
-# BLOCO 4 — GERAÇÃO DO EMAIL
+# BLOCO 4 — EXTRAÇÃO DA SIMULAÇÃO (WHITELIST)
 # ══════════════════════════════════════════════════════
 
-def gerar_email(texto_bruto, dados, pdfs_selecionados):
-    campos = []
-    if dados.get("email"):       campos.append(f"• 📧 E-mail: {dados['email']}")
-    if dados.get("telefone"):    campos.append(f"• 📱 Telefone: {dados['telefone']}")
-    if dados.get("nit_pis_nis"): campos.append(f"• 🪪 NIT/PIS/NIS: {dados['nit_pis_nis']}")
-    if dados.get("renda_valor"):
-        tipo = dados.get("renda_tipo",""); prof = dados.get("renda_profissao","")
-        det  = f" ({tipo} – {prof})" if tipo or prof else ""
-        campos.append(f"• 💰 Renda mensal: {dados['renda_valor']}{det}")
-    if str(dados.get("nunca_trabalhou_carteira","")).lower() in ("true","sim","yes","1"):
-        campos.append("• Nunca trabalhou de carteira assinada")
-    if dados.get("dependentes"):  campos.append(f"• Possui {dados['dependentes']} dependente(s)")
-    if dados.get("cpf"):          campos.append(f"• CPF: {dados['cpf']}")
-    if dados.get("estado_civil"): campos.append(f"• Estado civil: {dados['estado_civil']}")
-    if dados.get("observacoes"):  campos.append(f"• Obs: {dados['observacoes']}")
+# ⚠️ WHITELIST ESTRITA — apenas estes campos podem entrar no texto automático.
+CAMPOS_SIMULACAO_PERMITIDOS = {
+    "tipo_imovel", "valor_imovel", "dependentes",
+    "multiplos_participantes", "participantes"
+}
 
-    campos_str   = "\n".join(campos) if campos else "[dados não identificados]"
-    nome_cliente = dados.get("nome_completo","a cliente").split()[0] if dados.get("nome_completo") else "a cliente"
-    nome_dest    = dados.get("nome_destinatario","")
-    saudacao     = f"Boa tarde, {nome_dest}." if nome_dest else "Boa tarde."
-    valor_imovel = dados.get("valor_imovel","")
-    tipo_imovel  = dados.get("tipo_imovel","")
-    ctx_imovel   = f" de imóvel {tipo_imovel} no valor de {valor_imovel}" if valor_imovel else ""
-    docs_lista   = "\n".join([f"- {n}" for n,_ in pdfs_selecionados])
-
+def extrair_dados_simulacao(texto_bruto, arquivos_bytes, pdfs_gerados):
+    """
+    Extrai SOMENTE os campos da simulação para geração do texto.
+    Qualquer campo fora da whitelist é bloqueado antes do texto.
+    """
     prompt = f"""
-Gere um email profissional CURTO e direto seguindo EXATAMENTE este modelo:
+Especialista em simulações de financiamento habitacional Caixa Econômica Federal.
 
-Assunto: [objetivo claro em até 10 palavras]
+⚠️ WHITELIST ESTRITA — extraia SOMENTE:
+1. tipo_imovel             — "novo" ou "usado"
+2. valor_imovel            — ex: R$ 205.000,00
+3. dependentes             — número inteiro (0 se nenhum)
+4. multiplos_participantes — true ou false
+5. participantes           — lista com:
+   - nome        (nome completo)
+   - fgts_3anos  (true = trabalhou +3 anos carteira FGTS)
+   - renda_valor (ex: R$ 2.550,00)
+   - renda_tipo  ("formal" ou "informal")
 
-{saudacao}
+🚫 PROIBIDO: CPF, RG, email, telefone, NIT, endereço, banco, estado civil, etc.
 
-Conforme simulação realizada, segue documentação da cliente {nome_cliente} para aprovação de financiamento{ctx_imovel}.
+FONTES:
+- TEXTO: {texto_bruto}
+- DOCUMENTOS: analisados abaixo
 
-Informações da cliente:
+RETORNE APENAS JSON:
+{{
+  "tipo_imovel": "",
+  "valor_imovel": "",
+  "dependentes": 0,
+  "multiplos_participantes": false,
+  "participantes": [{{"nome":"","fgts_3anos":false,"renda_valor":"","renda_tipo":""}}]
+}}
+"""
+    parts = [{"text": prompt}]
+    for nome, conteudo, tipo in arquivos_bytes:
+        b64  = base64.b64encode(conteudo).decode('utf-8')
+        mime = "application/pdf" if tipo=="pdf" else "image/jpeg"
+        parts += [{"text":f"DOCUMENTO: {nome}"},{"inline_data":{"mime_type":mime,"data":b64}}]
+    for nome, conteudo in pdfs_gerados:
+        b64 = base64.b64encode(conteudo).decode('utf-8')
+        parts += [{"text":f"DOCUMENTO: {nome}"},{"inline_data":{"mime_type":"application/pdf","data":b64}}]
+    try:
+        resp  = chamar_gemini(parts)
+        dados = json.loads(resp.replace('```json','').replace('```','').strip())
+        return validar_dados_simulacao(dados)
+    except:
+        return None
 
-{campos_str}
+def validar_dados_simulacao(dados_brutos):
+    """
+    ⚠️ Remove qualquer campo fora da whitelist da simulação.
+    Aplica whitelist também dentro de cada participante.
+    """
+    participantes_brutos = dados_brutos.get("participantes", [])
+    participantes_limpos = [
+        {
+            "nome"       : p.get("nome",""),
+            "fgts_3anos" : p.get("fgts_3anos", False),
+            "renda_valor": p.get("renda_valor",""),
+            "renda_tipo" : p.get("renda_tipo",""),
+        }
+        for p in participantes_brutos
+    ]
+    return {
+        "tipo_imovel"           : dados_brutos.get("tipo_imovel",""),
+        "valor_imovel"          : dados_brutos.get("valor_imovel",""),
+        "dependentes"           : dados_brutos.get("dependentes", 0),
+        "multiplos_participantes": dados_brutos.get("multiplos_participantes", False),
+        "participantes"         : participantes_limpos,
+    }
 
+
+# ══════════════════════════════════════════════════════
+# BLOCO 5 — GERAÇÃO DO TEXTO AUTOMÁTICO
+# ══════════════════════════════════════════════════════
+
+def saudacao_por_horario():
+    """Saudação automática baseada no horário de Brasília."""
+    hora = datetime.now(timezone(timedelta(hours=-3))).hour
+    if 6 <= hora < 12:  return "Bom dia"
+    if 12 <= hora < 18: return "Boa tarde"
+    return "Boa noite"
+
+def gerar_texto_automatico(dados_simulacao, dados_contato, nome_destinatario,
+                            nome_corretor, creci):
+    """
+    Gera o texto usando SOMENTE os campos das whitelists.
+    Nenhuma informação fora do permitido chega ao prompt.
+    """
+    if not dados_simulacao:
+        return "Não foi possível extrair os dados da simulação. Verifique os documentos enviados."
+
+    saudacao      = saudacao_por_horario()
+    destinat      = f", {nome_destinatario}" if nome_destinatario else ""
+    tipo_imovel   = dados_simulacao.get("tipo_imovel","")
+    valor_imovel  = dados_simulacao.get("valor_imovel","")
+    dependentes   = int(dados_simulacao.get("dependentes") or 0)
+    multiplos     = dados_simulacao.get("multiplos_participantes", False)
+    participantes = dados_simulacao.get("participantes", [])
+
+    # Nome do titular para o assunto e título
+    titular       = participantes[0]["nome"] if participantes else "cliente"
+    primeiro_nome = titular.split()[0] if titular else "cliente"
+
+    # Monta bloco de participantes — SOMENTE campos whitelist
+    linhas_part = []
+    for i, p in enumerate(participantes):
+        prefixo  = f"Participante {i+1}: " if multiplos else ""
+        fgts_txt = "Trabalhou mais de 3 anos com carteira assinada (FGTS: sim)" \
+                   if p.get("fgts_3anos") else "Nunca trabalhou de carteira assinada (FGTS: não)"
+        dep_txt  = f"Possui {dependentes} dependente(s)" if (i == 0 and dependentes > 0) else \
+                   ("Sem dependentes" if i == 0 else "")
+        linha = f"• {prefixo}{p.get('nome','')}\n"
+        linha += f"  - Renda: {p.get('renda_valor','')} ({p.get('renda_tipo','')})\n"
+        linha += f"  - {fgts_txt}\n"
+        if dep_txt: linha += f"  - {dep_txt}\n"
+        linhas_part.append(linha)
+    bloco_participantes = "\n".join(linhas_part)
+
+    # Monta bloco de contato — SOMENTE campos whitelist
+    linhas_contato = []
+    if dados_contato.get("email"):
+        linhas_contato.append(f"• 📧 E-mail: {dados_contato['email']}")
+    if dados_contato.get("telefone"):
+        linhas_contato.append(f"• 📱 Telefone: {dados_contato['telefone']}")
+    if dados_contato.get("pis_nis_nit"):
+        linhas_contato.append(f"• 🪪 PIS/NIS/NIT: {dados_contato['pis_nis_nit']}")
+    bloco_contato = "\n".join(linhas_contato)
+
+    # Assinatura do corretor
+    assinatura = f"Att,\n{nome_corretor}"
+    if creci: assinatura += f" — CRECI {creci}"
+
+    ctx_imovel = ""
+    if tipo_imovel and valor_imovel:
+        ctx_imovel = f" de imóvel {tipo_imovel} no valor de {valor_imovel}"
+    elif valor_imovel:
+        ctx_imovel = f" no valor de {valor_imovel}"
+
+    assunto = f"Documentação {primeiro_nome}"
+    if tipo_imovel: assunto += f" — Imóvel {tipo_imovel.capitalize()}"
+    if valor_imovel: assunto += f" {valor_imovel}"
+
+    corpo = f"""{saudacao}{destinat}.
+
+Conforme simulação realizada, segue documentação da cliente {primeiro_nome} para aprovação de financiamento{ctx_imovel}.
+
+{"**Participantes:**" if multiplos else "**Informações da cliente:**"}
+
+{bloco_participantes}"""
+
+    if bloco_contato:
+        corpo += f"\n**Dados de contato:**\n{bloco_contato}\n"
+
+    corpo += f"""
 Solicito, por gentileza, aprovação conforme simulação encaminhada.
 
 Fico no aguardo do retorno.
-Obrigada.
 
-REGRAS: Use o modelo acima. Não adicione parágrafos extras. Remova campos vazios. NÃO invente nada.
-DADOS: {json.dumps(dados, ensure_ascii=False)}
-TEXTO ORIGINAL: {texto_bruto}
-DOCUMENTOS ANEXADOS: {docs_lista}
+{assinatura}"""
 
-RETORNE APENAS O EMAIL.
-"""
-    try:
-        return chamar_gemini([{"text": prompt}]).strip()
-    except: return ""
+    return f"Assunto: {assunto}\n\n{corpo.strip()}"
 
 
 # ══════════════════════════════════════════════════════
-# BLOCO 5 — CHECKLIST
+# BLOCO 6 — CHECKLIST
 # ══════════════════════════════════════════════════════
 
 def calcular_checklist(nomes_pdfs):
-    docs = set(n.replace('.pdf','').lower() for n in nomes_pdfs)
+    docs  = set(n.replace('.pdf','').lower() for n in nomes_pdfs)
     tem_h = any('holerite' in d for d in docs)
     tem_e = any('extrato'  in d for d in docs)
     tipo  = "FORMAL" if tem_h else ("INFORMAL" if tem_e else "NÃO IDENTIFICADA")
-
     obrig = {
         "CPF"                      : ["cpf"],
         "RG ou CNH"                : ["rg","cnh"],
@@ -675,7 +701,6 @@ def calcular_checklist(nomes_pdfs):
     elif tipo=="INFORMAL": obrig["3 Últimos Extratos Bancários"] = ["extrato_bancario","extrato"]
     else:                  obrig["Comprovante de Renda"]         = ["holerite","extrato"]
     obrig["Simulação Habitacional"] = ["simulacao_habitacional"]
-
     ok=[]; faltando=[]
     for nome, chaves in obrig.items():
         enc = any(any(c in d for d in docs) for c in chaves)
@@ -690,7 +715,7 @@ def calcular_checklist(nomes_pdfs):
 
 
 # ══════════════════════════════════════════════════════
-# BLOCO 6 — ENVIO POR EMAIL
+# BLOCO 7 — ENVIO POR EMAIL
 # ══════════════════════════════════════════════════════
 
 def enviar_email(pdfs_selecionados, destino, remetente, senha, assunto, corpo):
@@ -708,24 +733,30 @@ def enviar_email(pdfs_selecionados, destino, remetente, senha, assunto, corpo):
 
 
 # ══════════════════════════════════════════════════════
-# BLOCO 7 — INTERFACE STREAMLIT
+# BLOCO 8 — INTERFACE STREAMLIT
 # ══════════════════════════════════════════════════════
+
+cliente       = st.session_state.get("cliente", {})
+plano_atual   = cliente.get("plano","free")
+is_pro        = plano_atual == "pro"
+nome_corretor = cliente.get("nome","")
+creci         = cliente.get("creci","")
 
 st.title("📁 DocCorretor IA")
 st.caption("Organize, identifique e envie documentos imobiliários com IA")
 st.divider()
 
-# ── Configurações de email (sidebar — salvas na sessão) ──
+# ── Sidebar ──
 with st.sidebar:
-    cliente = st.session_state.get("cliente", {})
-    st.markdown(f"### 👤 {cliente.get('nome','')}")
-    st.caption(f"Plano: {cliente.get('plano','').capitalize()} | Vence: {cliente.get('data_vencimento','')}")
+    st.markdown(f"### 👤 {nome_corretor}")
+    plano_badge = "🟢 PRO" if is_pro else "🟡 FREE"
+    st.caption(f"Plano: {plano_badge} | Vence: {cliente.get('data_vencimento','')}")
     st.divider()
     st.header("⚙️ Configurações de Envio")
     st.caption("Preencha uma vez — fica salvo enquanto o app estiver aberto.")
     cfg_destino   = st.text_input("📧 Email destino",  value=st.session_state.get("cfg_destino",""),  placeholder="destinatario@email.com")
     cfg_remetente = st.text_input("📤 Seu Gmail",      value=st.session_state.get("cfg_remetente", cliente.get("gmail_remetente","")), placeholder="seuemail@gmail.com")
-    cfg_senha     = st.text_input("🔑 Senha de app",   value=st.session_state.get("cfg_senha", cliente.get("gmail_senha_app","")),    type="password", placeholder="Senha de app Gmail")
+    cfg_senha     = st.text_input("🔑 Senha de app",   value=st.session_state.get("cfg_senha", cliente.get("gmail_senha_app","")), type="password", placeholder="Senha de app Gmail")
     if st.button("💾 Salvar configuração"):
         st.session_state["cfg_destino"]   = cfg_destino
         st.session_state["cfg_remetente"] = cfg_remetente
@@ -735,7 +766,8 @@ with st.sidebar:
     st.caption("💡 Senha de app ≠ senha do Gmail\nmyaccount.google.com → Segurança → Senhas de app")
     st.divider()
     if st.button("🚪 Sair", use_container_width=True):
-        for k in ["autenticado","cliente","cfg_destino","cfg_remetente","cfg_senha","pdfs_gerados","email_gerado","processado"]:
+        for k in ["autenticado","cliente","cfg_destino","cfg_remetente","cfg_senha",
+                  "pdfs_gerados","email_gerado","processado"]:
             st.session_state.pop(k, None)
         st.query_params.clear()
         st.rerun()
@@ -753,10 +785,17 @@ st.subheader("📝 Passo 2 — Texto do WhatsApp (opcional)")
 texto_bruto = st.text_area(
     "Cole aqui mensagens, anotações, informações do cliente",
     height=120,
-    placeholder="Ex:\nGmail: cliente@gmail.com\nNIT 160.74503.57-6\n81 9 9296-7781\nRenda informal R$2.550 designer de unhas, 1 dependente, imóvel novo R$205.000..."
+    placeholder="Ex:\nGmail: cliente@gmail.com\nNIT 160.74503.57-6\n81 9 9296-7781\nRenda informal R$2.550, imóvel novo R$205.000, 1 dependente..."
 )
 
-# ── PASSO 3: Processar ──
+# ── PASSO 3: Destinatário ──
+st.subheader("👤 Passo 3 — Nome do destinatário")
+nome_destinatario = st.text_input(
+    "Nome de quem vai receber o email",
+    placeholder="Ex: Ana, Carlos, Caixa Econômica..."
+)
+
+# ── PROCESSAR ──
 st.divider()
 processar = st.button("🚀 PROCESSAR ARQUIVOS E TEXTO", type="primary", use_container_width=True)
 
@@ -764,76 +803,74 @@ if processar:
     if not arquivos_upload:
         st.error("⚠️ Faça o upload de pelo menos um arquivo antes de processar.")
     else:
-        # Prepara lista de arquivos
-        extensoes_img = ('.jpg','.jpeg','.png','.bmp','.webp','.tiff')
         arquivos_bytes = []
         for arq in arquivos_upload:
             conteudo = arq.read()
             tipo     = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
             arquivos_bytes.append((arq.name, conteudo, tipo))
 
-        barra = st.progress(0, text="📄 Lendo e organizando documentos...")
+        barra = st.progress(0, text="📄 Organizando documentos...")
         pdfs_gerados = processar_documentos(arquivos_bytes)
-        barra.progress(55, text="🔍 Extraindo dados do texto e documentos...")
-        dados = extrair_dados(texto_bruto, arquivos_bytes, pdfs_gerados)
-        barra.progress(80, text="✍️ Gerando email profissional...")
-        gerado = gerar_email(texto_bruto, dados, pdfs_gerados)
-        barra.progress(100, text="✅ Concluído!")
-        import time; time.sleep(0.5)
-        barra.empty()
 
-        # Salva no session_state para persistir
+        barra.progress(35, text="🔍 Extraindo dados de contato...")
+        dados_contato = extrair_dados(texto_bruto, arquivos_bytes, pdfs_gerados)
+
+        barra.progress(60, text="📋 Lendo dados da simulação...")
+        dados_simulacao = extrair_dados_simulacao(texto_bruto, arquivos_bytes, pdfs_gerados)
+
+        barra.progress(85, text="✍️ Gerando texto profissional...")
+        gerado = gerar_texto_automatico(
+            dados_simulacao, dados_contato,
+            nome_destinatario, nome_corretor, creci
+        )
+
+        barra.progress(100, text="✅ Concluído!")
+        time.sleep(0.5); barra.empty()
+
         st.session_state["pdfs_gerados"] = pdfs_gerados
         st.session_state["email_gerado"] = gerado
         st.session_state["processado"]   = True
-        # Registra uso no Supabase
+
         cliente_sess = st.session_state.get("cliente")
         if cliente_sess:
             registrar_uso(cliente_sess, qtd_arquivos=len(arquivos_bytes))
 
-# ── Resultados (aparecem após processar) ──
+# ── Resultados ──
 if st.session_state.get("processado"):
     pdfs_gerados = st.session_state["pdfs_gerados"]
     email_gerado = st.session_state["email_gerado"]
 
     st.divider()
 
-    # ── Checklist ──
+    # Checklist
     checklist = calcular_checklist([n for n,_ in pdfs_gerados])
     icone = "✅" if checklist['completo'] else "🚨"
     with st.expander(f"{icone} CHECKLIST — Renda: {checklist['tipo']}", expanded=True):
-        for i in checklist['ok']:      st.markdown(f"<span class='checklist-ok'>{i}</span>",    unsafe_allow_html=True)
+        for i in checklist['ok']:
+            st.markdown(f"<span class='checklist-ok'>{i}</span>", unsafe_allow_html=True)
         for i in checklist['faltando']:
             cor = "checklist-aviso" if "⚠️" in i else "checklist-falta"
             st.markdown(f"<span class='{cor}'>{i}</span>", unsafe_allow_html=True)
 
     st.divider()
 
-    # ── ETAPA 1: Documentos com checkbox ──
+    # Etapa 1 — Documentos
     st.subheader("📄 Etapa 1 — Documentos gerados")
     st.caption("Desmarque o que estiver duplicado ou incorreto")
-
     selecionados = []
     for nome, conteudo in pdfs_gerados:
         col1, col2 = st.columns([0.7, 0.3])
         with col1:
             marcado = st.checkbox(f"📎 {nome}", value=True, key=f"cb_{nome}")
         with col2:
-            st.download_button(
-                "⬇️ Baixar",
-                data=conteudo,
-                file_name=nome,
-                mime="application/pdf",
-                key=f"dl_{nome}"
-            )
+            st.download_button("⬇️ Baixar", data=conteudo, file_name=nome,
+                               mime="application/pdf", key=f"dl_{nome}")
         if marcado: selecionados.append((nome, conteudo))
 
     st.divider()
 
-    # ── ETAPA 2: Email ──
-    st.subheader("📝 Etapa 2 — Email gerado (editável)")
-
-    # Extrai assunto
+    # Etapa 2 — Texto gerado
+    st.subheader("📝 Etapa 2 — Texto gerado (editável)")
     assunto_inicial = "Documentação do Cliente"
     corpo_inicial   = email_gerado
     for linha in email_gerado.split('\n')[:5]:
@@ -843,45 +880,41 @@ if st.session_state.get("processado"):
             break
 
     assunto_edit = st.text_input("Assunto", value=assunto_inicial)
-    corpo_edit   = st.text_area("Corpo do email", value=corpo_inicial, height=280)
+    corpo_edit   = st.text_area("Corpo do email", value=corpo_inicial, height=300)
 
     st.divider()
 
-    # ── ETAPA 3: Envio ──
+    # Etapa 3 — Envio
     st.subheader("📬 Etapa 3 — Envio")
 
-    opcao = st.radio(
-        "O que deseja fazer?",
-        ["📥 Apenas baixar todos os arquivos",
-         "📧 Apenas enviar por email",
-         "📥📧 Baixar E enviar por email"],
-        horizontal=True
-    )
+    if not is_pro:
+        st.info("📧 **Envio por email disponível no plano PRO.**\nVocê pode baixar os arquivos normalmente.\nFale com o suporte para fazer upgrade.")
+
+    opcoes = ["📥 Apenas baixar todos os arquivos"]
+    if is_pro:
+        opcoes += ["📧 Apenas enviar por email", "📥📧 Baixar E enviar por email"]
+
+    opcao = st.radio("O que deseja fazer?", opcoes, horizontal=True)
 
     col_exec, col_cancel = st.columns([1,1])
 
     with col_exec:
         if st.button("✅ CONFIRMAR E EXECUTAR", type="primary", use_container_width=True):
-            destino   = st.session_state.get("cfg_destino","")
-            remetente = st.session_state.get("cfg_remetente","")
-            senha     = st.session_state.get("cfg_senha","")
 
             if "📥" in opcao:
-                # Cria ZIP com todos os selecionados
-                import io
                 zip_buf = io.BytesIO()
                 with zipfile.ZipFile(zip_buf, "w") as zf:
                     for nome, conteudo in selecionados:
                         zf.writestr(nome, conteudo)
                 zip_buf.seek(0)
-                st.download_button(
-                    "⬇️ Baixar todos como ZIP",
-                    data=zip_buf,
-                    file_name="documentos_cliente.zip",
-                    mime="application/zip"
-                )
+                st.download_button("⬇️ Baixar todos como ZIP", data=zip_buf,
+                                   file_name="documentos_cliente.zip",
+                                   mime="application/zip")
 
-            if "📧" in opcao or "enviar" in opcao.lower():
+            if is_pro and ("📧" in opcao or "enviar" in opcao.lower()):
+                destino   = st.session_state.get("cfg_destino","")
+                remetente = st.session_state.get("cfg_remetente","")
+                senha     = st.session_state.get("cfg_senha","")
                 if not destino or '@' not in destino:
                     st.error("❌ Configure o email destino na barra lateral.")
                 elif not remetente or '@' not in remetente:
@@ -891,17 +924,19 @@ if st.session_state.get("processado"):
                 else:
                     try:
                         barra_env = st.progress(0, text="📧 Conectando ao Gmail...")
-                        import time as _t; _t.sleep(0.3)
+                        time.sleep(0.3)
                         barra_env.progress(40, text="📤 Anexando arquivos...")
-                        enviar_email(selecionados, destino, remetente, senha, assunto_edit, corpo_edit)
+                        enviar_email(selecionados, destino, remetente, senha,
+                                     assunto_edit, corpo_edit)
                         barra_env.progress(100, text="✅ Email enviado!")
-                        _t.sleep(0.5); barra_env.empty()
+                        time.sleep(0.5); barra_env.empty()
                         st.success(f"✅ Email enviado para {destino} com {len(selecionados)} arquivo(s)!")
                         cliente_sess = st.session_state.get("cliente")
                         if cliente_sess:
-                            registrar_uso(cliente_sess, qtd_arquivos=len(selecionados), email_enviado=True)
+                            registrar_uso(cliente_sess, qtd_arquivos=len(selecionados),
+                                          email_enviado=True)
                     except smtplib.SMTPAuthenticationError:
-                        st.error("❌ Autenticação falhou! Use senha de APP do Gmail.\nmyaccount.google.com → Segurança → Senhas de app")
+                        st.error("❌ Autenticação falhou! Use senha de APP do Gmail.")
                     except Exception as e:
                         st.error(f"❌ Erro ao enviar: {e}")
 
