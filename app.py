@@ -312,16 +312,16 @@ RETORNE APENAS JSON:
 
 def gerar_email(texto_bruto, dados, pdfs_selecionados):
     campos = []
-    # Email — avisa se não encontrado
+    # Email — sempre aparece, em branco se não encontrado
     if dados.get("email"):
         campos.append(f"• 📧 E-mail: {dados['email']}")
     else:
-        campos.append("• 📧 E-mail: ⚠️ NÃO ENCONTRADO — preencha antes de enviar")
-    # Telefone — avisa se não encontrado
+        campos.append("• 📧 E-mail: ")
+    # Telefone — sempre aparece, em branco se não encontrado
     if dados.get("telefone"):
         campos.append(f"• 📱 Telefone: {dados['telefone']}")
     else:
-        campos.append("• 📱 Telefone: ⚠️ NÃO ENCONTRADO — preencha antes de enviar")
+        campos.append("• 📱 Telefone: ")
     if dados.get("nit_pis_nis"): campos.append(f"• 🪪 NIT/PIS/NIS: {dados['nit_pis_nis']}")
     if dados.get("renda_valor"):
         tipo = dados.get("renda_tipo",""); prof = dados.get("renda_profissao","")
@@ -396,12 +396,20 @@ def calcular_checklist(nomes_pdfs, dados=None):
         "RG ou CNH"                : ["rg","cnh"],
         "Certidão de Estado Civil" : ["certidao_nascimento","certidao_casamento"],
         "Comprovante de Residência": ["comprovante_residencia"],
-        "Carteira de Trabalho"     : ["carteira_de_trabalho"],
         "NIS / BIZ / NIT"          : ["nis_cadunico","biz","nit","pis","pasep"],
     }
-    if tipo=="FORMAL":     obrig["3 Últimos Holerites"]          = ["holerite"]
-    elif tipo=="INFORMAL": obrig["3 Últimos Extratos Bancários"] = ["extrato_bancario","extrato"]
-    else:                  obrig["Comprovante de Renda"]         = ["holerite","extrato"]
+    if tipo=="FORMAL":
+        obrig["Carteira de Trabalho"]         = ["carteira_de_trabalho"]
+        obrig["3 Últimos Holerites"]          = ["holerite"]
+    elif tipo=="INFORMAL":
+        obrig["3 Últimos Extratos Bancários"] = ["extrato_bancario","extrato"]
+        # Carteira só obrigatória se teve vínculo CLT (nunca_trabalhou_carteira != true)
+        nunca_clt = str((dados or {}).get("nunca_trabalhou_carteira","")).lower()
+        teve_clt  = nunca_clt not in ("true","sim","yes","1")
+        if teve_clt:
+            obrig["Carteira de Trabalho (+3 anos FGTS)"] = ["carteira_de_trabalho"]
+    else:
+        obrig["Comprovante de Renda"]         = ["holerite","extrato"]
     obrig["Simulação Habitacional"] = ["simulacao_habitacional"]
 
     ok=[]; faltando=[]
@@ -560,12 +568,27 @@ if st.session_state.get("processado"):
             )
         if marcado: selecionados.append((nome, conteudo))
 
+    # ── Botão ZIP ao final da lista ──
+    if selecionados:
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            for nome, conteudo in selecionados:
+                zf.writestr(nome, conteudo)
+        zip_buf.seek(0)
+        st.download_button(
+            "⬇️ Baixar toda documentação em ZIP",
+            data=zip_buf,
+            file_name="documentos_cliente.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="zip_final"
+        )
+
     st.divider()
 
-    # ── ETAPA 2: Email ──
-    st.subheader("📝 Etapa 2 — Email gerado (editável)")
+    # ── ETAPA 2: Texto gerado ──
+    st.subheader("📝 Etapa 2 — Texto gerado (editável)")
 
-    # Extrai assunto
     assunto_inicial = "Documentação do Cliente"
     corpo_inicial   = email_gerado
     for linha in email_gerado.split('\n')[:5]:
@@ -577,61 +600,49 @@ if st.session_state.get("processado"):
     assunto_edit = st.text_input("Assunto", value=assunto_inicial)
     corpo_edit   = st.text_area("Corpo do email", value=corpo_inicial, height=280)
 
+    # ── Botão copiar texto ──
+    texto_completo = f"Assunto: {assunto_edit}\n\n{corpo_edit}"
+    st.components.v1.html(f"""
+    <button onclick="navigator.clipboard.writeText({json.dumps(texto_completo)});this.innerText='✅ Copiado!';setTimeout(()=>this.innerText='📋 Copiar texto',2000);"
+        style="width:100%;padding:10px;background:#1976d2;color:white;border:none;border-radius:6px;font-size:15px;cursor:pointer;margin-top:4px;">
+        📋 Copiar texto
+    </button>
+    """, height=50)
+
     st.divider()
 
     # ── ETAPA 3: Envio ──
-    st.subheader("📬 Etapa 3 — Envio")
-
-    opcao = st.radio(
-        "O que deseja fazer?",
-        ["📥 Apenas baixar todos os arquivos",
-         "📧 Apenas enviar por email",
-         "📥📧 Baixar E enviar por email"],
-        horizontal=True
-    )
+    st.subheader("📬 Etapa 3 — Enviar por email")
+    st.caption("Configure o email destino e seu Gmail na barra lateral antes de enviar.")
 
     col_exec, col_cancel = st.columns([1,1])
 
     with col_exec:
-        if st.button("✅ CONFIRMAR E EXECUTAR", type="primary", use_container_width=True):
+        if st.button("📧 Enviar por email", type="primary", use_container_width=True):
             destino   = st.session_state.get("cfg_destino","")
             remetente = st.session_state.get("cfg_remetente","")
             senha     = st.session_state.get("cfg_senha","")
-
-            if "📥" in opcao:
-                # Cria ZIP com todos os selecionados
-                import io
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, "w") as zf:
-                    for nome, conteudo in selecionados:
-                        zf.writestr(nome, conteudo)
-                zip_buf.seek(0)
-                st.download_button(
-                    "⬇️ Baixar todos como ZIP",
-                    data=zip_buf,
-                    file_name="documentos_cliente.zip",
-                    mime="application/zip"
-                )
-
-            if "📧" in opcao or "enviar" in opcao.lower():
-                if not destino or '@' not in destino:
-                    st.error("❌ Configure o email destino na barra lateral.")
-                elif not remetente or '@' not in remetente:
-                    st.error("❌ Configure seu Gmail na barra lateral.")
-                elif not senha:
-                    st.error("❌ Configure a senha de app na barra lateral.")
-                else:
-                    try:
-                        with st.spinner("📧 Enviando email..."):
-                            enviar_email(selecionados, destino, remetente, senha, assunto_edit, corpo_edit)
-                        st.success(f"✅ Email enviado para {destino} com {len(selecionados)} arquivo(s)!")
-                    except smtplib.SMTPAuthenticationError:
-                        st.error("❌ Autenticação falhou! Use senha de APP do Gmail.\nmyaccount.google.com → Segurança → Senhas de app")
-                    except Exception as e:
-                        st.error(f"❌ Erro ao enviar: {e}")
+            if not destino or '@' not in destino:
+                st.error("❌ Configure o email destino na barra lateral.")
+            elif not remetente or '@' not in remetente:
+                st.error("❌ Configure seu Gmail na barra lateral.")
+            elif not senha:
+                st.error("❌ Configure a senha de app na barra lateral.")
+            else:
+                try:
+                    with st.spinner("📧 Enviando email..."):
+                        enviar_email(selecionados, destino, remetente, senha, assunto_edit, corpo_edit)
+                    st.success(f"✅ Email enviado para {destino} com {len(selecionados)} arquivo(s)!")
+                    cliente_sess = st.session_state.get("cliente")
+                    if cliente_sess:
+                        registrar_uso(cliente_sess, qtd_arquivos=len(selecionados), email_enviado=True)
+                except smtplib.SMTPAuthenticationError:
+                    st.error("❌ Autenticação falhou! Use senha de APP do Gmail.")
+                except Exception as e:
+                    st.error(f"❌ Erro ao enviar: {e}")
 
     with col_cancel:
         if st.button("🔄 Novo processo", use_container_width=True):
-            for key in ["pdfs_gerados","email_gerado","processado"]:
+            for key in ["pdfs_gerados","email_gerado","processado","dados"]:
                 if key in st.session_state: del st.session_state[key]
             st.rerun()
