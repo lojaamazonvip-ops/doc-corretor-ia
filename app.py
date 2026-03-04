@@ -23,7 +23,7 @@ from pathlib import Path
 # ══════════════════════════════════════════════════════
 
 st.set_page_config(
-    page_title="DocCorretor IA",
+    page_title="ImobFlow",
     page_icon="📁",
     layout="centered"
 )
@@ -47,8 +47,8 @@ st.markdown("""
     /* Botão WhatsApp flutuante */
     .whatsapp-float {
         position: fixed;
-        bottom: 24px;
-        right: 24px;
+        top: 16px;
+        right: 16px;
         z-index: 9999;
         display: flex;
         flex-direction: column;
@@ -56,8 +56,8 @@ st.markdown("""
         text-decoration: none;
     }
     .whatsapp-float .wa-circle {
-        width: 58px;
-        height: 58px;
+        width: 52px;
+        height: 52px;
         background: #25d366;
         border-radius: 50%;
         display: flex;
@@ -70,7 +70,7 @@ st.markdown("""
         transform: scale(1.1);
     }
     .whatsapp-float .wa-circle svg {
-        width: 32px; height: 32px; fill: white;
+        width: 28px; height: 28px; fill: white;
     }
     .whatsapp-float .wa-label {
         margin-top: 4px;
@@ -87,7 +87,7 @@ st.markdown("""
 
 <!-- Botão WhatsApp flutuante -->
 <a class="whatsapp-float"
-   href="https://wa.me/5581992952521?text=Ol%C3%A1!%20Tenho%20d%C3%BAvidas%20sobre%20o%20DocCorretor%20IA."
+   href="https://wa.me/5581992952521?text=Ol%C3%A1!%20Tenho%20d%C3%BAvidas%20sobre%20o%20ImobFlow%20IA."
    target="_blank">
   <div class="wa-circle">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
@@ -538,24 +538,27 @@ def enviar_email(pdfs_selecionados, destino, remetente, senha, assunto, corpo):
 # BLOCO 7 — INTERFACE STREAMLIT
 # ══════════════════════════════════════════════════════
 
-st.title("📁 DocCorretor IA")
+st.title("📁 ImobFlow")
 st.caption("Organize, identifique e envie documentos imobiliários com IA")
 
 # ── Banner contador de dias (só para FREE) ──
+# Lê direto do session_state APÓS check_login() ter autenticado
 _cliente_top = st.session_state.get("cliente", {})
-_plano_top   = _cliente_top.get("plano","free")
-_venc_top    = _cliente_top.get("data_vencimento","")
-if _plano_top not in ("mensal","semestral","anual"):
+_plano_top   = _cliente_top.get("plano", "free")
+_venc_top    = _cliente_top.get("data_vencimento", "")
+_is_pro_top  = _plano_top in ("mensal", "semestral", "anual")
+
+if not _is_pro_top and _venc_top:
     try:
         _dias = (date.fromisoformat(_venc_top) - date.today()).days
         if _dias > 3:
-            st.info(f"🆓 **Teste gratuito** — ⏳ {_dias} dias restantes para expirar seu acesso.")
+            st.info(f"🆓 **Teste gratuito** — ⏳ **{_dias} dias restantes** para expirar seu acesso.")
         elif _dias > 0:
-            st.warning(f"⚠️ **Seu acesso expira em {_dias} dia(s)!** Faça upgrade agora para não perder o acesso.")
+            st.warning(f"⚠️ **ATENÇÃO: {_dias} dia(s) restante(s)!** Faça upgrade agora para não perder o acesso.")
         elif _dias == 0:
             st.error("🚨 **Seu acesso expira HOJE!** Faça upgrade imediatamente.")
         else:
-            st.error("❌ **Acesso expirado.** Faça upgrade para continuar usando o DocCorretor IA.")
+            st.error("❌ **Acesso expirado.** Faça upgrade para continuar usando.")
     except:
         pass
 
@@ -733,8 +736,6 @@ if st.session_state.get("processado"):
         LINK_MENSAL    = "https://kiwify.com.br/PLACEHOLDER_MENSAL"
         LINK_SEMESTRAL = "https://kiwify.com.br/PLACEHOLDER_SEMESTRAL"
         LINK_ANUAL     = "https://kiwify.com.br/PLACEHOLDER_ANUAL"
-        LINK_WHATSAPP  = "https://wa.me/5581992952521?text=Ol%C3%A1!%20Tenho%20interesse%20no%20DocCorretor%20IA."
-
         st.markdown("---")
         st.markdown("### 🚀 Faça upgrade para enviar emails")
         st.caption("Escolha seu plano e continue usando sem limites:")
@@ -753,11 +754,6 @@ if st.session_state.get("processado"):
             padding:12px;background:#f57c00;color:white;border-radius:8px;
             text-decoration:none;font-weight:bold;margin-bottom:8px;">
             🏆 Anual — R$ 897,00 &nbsp; ⭐ Mais escolhido</a>""", unsafe_allow_html=True)
-
-        st.markdown(f"""<a href="{LINK_WHATSAPP}" target="_blank" style="display:block;text-align:center;
-            padding:12px;background:#25d366;color:white;border-radius:8px;
-            text-decoration:none;font-weight:bold;">
-            💬 Falar com suporte no WhatsApp</a>""", unsafe_allow_html=True)
         st.markdown("---")
     else:
         st.caption("Configure o email destino e seu Gmail na barra lateral antes de enviar.")
