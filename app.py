@@ -11,6 +11,151 @@ import tempfile
 import zipfile
 import io
 from datetime import datetime, timedelta, timezone, date
+import secrets
+
+# ══════════════════════════════════════════════════════
+# SUPABASE + LOGIN
+# ══════════════════════════════════════════════════════
+
+SUPABASE_URL    = "https://ryvgqesflxbtqbdhspdy.supabase.co"
+SUPABASE_KEY    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ5dmdxZXNmbHhidHFiZGhzcGR5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyOTIyMjMsImV4cCI6MjA4Nzg2ODIyM30.HhW3_bSQ8fZvY17XTwerhXdW7hF2uf3gKUSYm9ixkys"
+SB_HEADERS      = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+EMAIL_REMETENTE = "daniellaandrade1989@gmail.com"
+EMAIL_SENHA_APP = "fpupijekoocowhcl"
+APP_URL         = "https://doc-corretor-ia.streamlit.app"
+SESSAO_TOKEN    = "imobflow_sessao_2025"
+
+def buscar_cliente(login, senha):
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/clientes?login=eq.{login}&select=*", headers=SB_HEADERS)
+    if r.status_code != 200: return None
+    dados = r.json()
+    if not dados: return None
+    c = dados[0]
+    return c if c.get("senha","").strip() == senha.strip() else None
+
+def buscar_cliente_por_email(email):
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/clientes?email=eq.{email}&select=*", headers=SB_HEADERS)
+    dados = r.json()
+    return dados[0] if dados else None
+
+def registrar_acesso(cliente):
+    requests.post(f"{SUPABASE_URL}/rest/v1/acessos",
+                  headers={**SB_HEADERS,"Content-Type":"application/json"},
+                  json={"cliente_id":cliente["id"],"cliente_nome":cliente["nome"],"cliente_login":cliente["login"]})
+
+def registrar_uso(cliente, qtd_arquivos=0, email_enviado=False):
+    requests.post(f"{SUPABASE_URL}/rest/v1/usos",
+                  headers={**SB_HEADERS,"Content-Type":"application/json"},
+                  json={"cliente_id":cliente["id"],"cliente_nome":cliente["nome"],
+                        "cliente_login":cliente["login"],"qtd_arquivos":qtd_arquivos,"email_enviado":email_enviado})
+
+def criar_token(cliente_id):
+    token  = secrets.token_urlsafe(32)
+    expira = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    requests.post(f"{SUPABASE_URL}/rest/v1/tokens_recuperacao",
+                  headers={**SB_HEADERS,"Content-Type":"application/json"},
+                  json={"tipo":"cliente","referencia":cliente_id,"token":token,"usado":False,"expira_em":expira})
+    return token
+
+def validar_token(token):
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/tokens_recuperacao?token=eq.{token}&usado=eq.false&select=*", headers=SB_HEADERS)
+    if r.status_code != 200: return None
+    dados = r.json()
+    if not dados: return None
+    rec = dados[0]
+    expira = datetime.fromisoformat(rec["expira_em"])
+    if expira.tzinfo is None: expira = expira.replace(tzinfo=timezone.utc)
+    return rec if datetime.now(timezone.utc) <= expira else None
+
+def marcar_token_usado(token_id):
+    requests.patch(f"{SUPABASE_URL}/rest/v1/tokens_recuperacao?id=eq.{token_id}",
+                   headers={**SB_HEADERS,"Content-Type":"application/json"}, json={"usado":True})
+
+def alterar_senha(cliente_id, nova_senha):
+    requests.patch(f"{SUPABASE_URL}/rest/v1/clientes?id=eq.{cliente_id}",
+                   headers={**SB_HEADERS,"Content-Type":"application/json"}, json={"senha":nova_senha})
+
+def enviar_email_recuperacao(email_destino, token):
+    link = f"{APP_URL}?token={token}"
+    html = f"""<h2>ImobFlow — Recuperação de Senha</h2>
+    <p>Clique no link para redefinir sua senha. Expira em <strong>30 minutos</strong>.</p>
+    <a href="{link}" style="background:#1976d2;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;">🔑 Redefinir Senha</a>"""
+    msg = MIMEMultipart("alternative")
+    msg["From"] = EMAIL_REMETENTE; msg["To"] = email_destino; msg["Subject"] = "ImobFlow — Recuperação de Senha"
+    msg.attach(MIMEText(html,"html","utf-8"))
+    with smtplib.SMTP_SSL("smtp.gmail.com",465) as s:
+        s.login(EMAIL_REMETENTE, EMAIL_SENHA_APP); s.sendmail(EMAIL_REMETENTE, email_destino, msg.as_bytes())
+
+def check_login():
+    params = st.query_params
+    token_url = params.get("token","")
+    sessao    = params.get("s","")
+
+    # Restaura sessão salva na URL
+    if sessao == SESSAO_TOKEN and not st.session_state.get("autenticado"):
+        login_salvo = params.get("u","")
+        if login_salvo:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/clientes?login=eq.{login_salvo}&select=*", headers=SB_HEADERS)
+            if r.status_code == 200 and r.json():
+                c = r.json()[0]
+                if c.get("ativo") and date.fromisoformat(c["data_vencimento"]) >= date.today():
+                    st.session_state["autenticado"] = True
+                    st.session_state["cliente"]     = c
+
+    # Tela redefinição de senha
+    if token_url and not st.session_state.get("autenticado"):
+        st.set_page_config(page_title="ImobFlow", page_icon="📁", layout="centered")
+        st.markdown("## 🗂️ ImobFlow — Redefinir senha")
+        st.divider()
+        rec = validar_token(token_url)
+        if not rec or rec.get("tipo") != "cliente":
+            st.error("❌ Link inválido ou expirado."); st.stop()
+        nova1 = st.text_input("Nova senha", type="password")
+        nova2 = st.text_input("Confirme", type="password")
+        if st.button("✅ Salvar", use_container_width=True, type="primary"):
+            if not nova1 or len(nova1) < 6: st.error("Mínimo 6 caracteres.")
+            elif nova1 != nova2: st.error("Senhas não coincidem.")
+            else:
+                alterar_senha(rec["referencia"], nova1); marcar_token_usado(rec["id"])
+                st.success("✅ Senha redefinida! Faça login."); st.query_params.clear()
+        st.stop()
+
+    # Tela de login
+    if not st.session_state.get("autenticado", False):
+        st.set_page_config(page_title="ImobFlow", page_icon="📁", layout="centered")
+        st.markdown("<style>section[data-testid=\'stMain\'] > div{max-width:420px;margin:70px auto;}</style>", unsafe_allow_html=True)
+        st.markdown("## 🗂️ ImobFlow")
+        st.caption("Sistema de organização de documentos para financiamento")
+        st.divider()
+        tela = st.radio("", ["🔑 Entrar","🔓 Esqueci minha senha"], horizontal=True, label_visibility="collapsed")
+        if tela == "🔑 Entrar":
+            login = st.text_input("👤 Login")
+            senha = st.text_input("🔑 Senha", type="password")
+            if st.button("Entrar", use_container_width=True, type="primary"):
+                c = buscar_cliente(login.strip(), senha.strip())
+                if not c: st.error("Login ou senha incorretos.")
+                elif not c.get("ativo"): st.error("❌ Acesso bloqueado.")
+                elif date.fromisoformat(c["data_vencimento"]) < date.today(): st.error("❌ Assinatura vencida.")
+                else:
+                    st.session_state["autenticado"] = True
+                    st.session_state["cliente"]     = c
+                    st.query_params["s"] = SESSAO_TOKEN
+                    st.query_params["u"] = c["login"]
+                    registrar_acesso(c); st.rerun()
+        else:
+            email_rec = st.text_input("📧 Email cadastrado")
+            if st.button("📧 Enviar link", use_container_width=True, type="primary"):
+                c = buscar_cliente_por_email(email_rec.strip())
+                if not c: st.error("Email não encontrado.")
+                else:
+                    try:
+                        token = criar_token(c["id"]); enviar_email_recuperacao(email_rec.strip(), token)
+                        st.success(f"✅ Link enviado para {email_rec}!")
+                    except Exception as e: st.error(f"❌ Erro: {e}")
+        st.stop()
+
+check_login()
+
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
