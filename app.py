@@ -688,6 +688,125 @@ def enviar_email(pdfs_selecionados, destino, remetente, senha, assunto, corpo):
 
 
 # ══════════════════════════════════════════════════════
+# BLOCO 5B — CHECKLIST DE LOCAÇÃO
+# ══════════════════════════════════════════════════════
+
+def calcular_checklist_locacao(nomes_pdfs, dados=None):
+    docs = set(n.replace('.pdf','').lower() for n in nomes_pdfs)
+    obrig = {
+        "Documento de Identificação (RG ou CNH)" : ["rg","cnh","identidade"],
+        "CPF"                                    : ["cpf"],
+        "Comprovante de Renda"                   : ["holerite","extrato","contracheque","decore","recibo","pro_labore"],
+        "Comprovante de Residência"              : ["comprovante_residencia"],
+        "Garantia Locatícia (Fiador/Caução/Seguro Fiança)" : ["fiador","caucao","seguro_fianca","carta_fianca","termo_caucao"],
+    }
+    ok = []; faltando = []
+    for nome, chaves in obrig.items():
+        enc = any(any(c in d for d in docs) for c in chaves)
+        (ok if enc else faltando).append(f"{'✅' if enc else '❌'} {nome}")
+    if dados:
+        if dados.get("email"):    ok.append("✅ E-mail do participante")
+        else: faltando.append("❌ E-mail do participante — obrigatório")
+        if dados.get("telefone"): ok.append("✅ Telefone do participante")
+        else: faltando.append("❌ Telefone do participante — obrigatório")
+    return {"ok": ok, "faltando": faltando, "completo": len(faltando) == 0}
+
+
+# ══════════════════════════════════════════════════════
+# BLOCO 6B — EXTRAÇÃO E EMAIL DE LOCAÇÃO
+# ══════════════════════════════════════════════════════
+
+CAMPOS_LOCACAO = {
+    "nome_completo", "cpf", "estado_civil", "profissao",
+    "renda_valor", "renda_tipo", "telefone", "email",
+    "tipo_garantia", "nome_destinatario"
+}
+
+def extrair_dados_locacao(texto_bruto, arquivos_bytes, pdfs_gerados):
+    prompt = f"""
+Especialista em documentação imobiliária brasileira para locação.
+Extraia informações de DUAS FONTES (texto e documentos).
+Se não encontrar → deixa ""
+
+TEXTO:
+{texto_bruto}
+
+⚠️ EXTRAIA SOMENTE estes campos:
+nome_completo, cpf, estado_civil, profissao,
+renda_valor, renda_tipo, telefone, email, tipo_garantia
+
+RETORNE APENAS JSON:
+{{
+  "nome_completo":"","cpf":"","estado_civil":"","profissao":"",
+  "renda_valor":"","renda_tipo":"","telefone":"","email":"","tipo_garantia":""
+}}
+"""
+    parts = [{"text": prompt}]
+    for nome, conteudo, tipo in arquivos_bytes:
+        b64  = base64.b64encode(conteudo).decode('utf-8')
+        mime = "application/pdf" if tipo == "pdf" else "image/jpeg"
+        parts += [{"text": f"DOCUMENTO: {nome}"}, {"inline_data": {"mime_type": mime, "data": b64}}]
+    for nome, conteudo in pdfs_gerados:
+        b64 = base64.b64encode(conteudo).decode('utf-8')
+        parts += [{"text": f"DOCUMENTO: {nome}"}, {"inline_data": {"mime_type": "application/pdf", "data": b64}}]
+    try:
+        resp = chamar_gemini(parts)
+        dados_brutos = json.loads(resp.replace('```json','').replace('```','').strip())
+        return {k: dados_brutos.get(k, "") for k in CAMPOS_LOCACAO}
+    except:
+        return {k: "" for k in CAMPOS_LOCACAO}
+
+
+def gerar_email_locacao(dados, pdfs_selecionados):
+    hora = datetime.now(timezone(timedelta(hours=-3))).hour
+    if 6 <= hora < 12:    saud = "Bom dia"
+    elif 12 <= hora < 18: saud = "Boa tarde"
+    else:                 saud = "Boa noite"
+
+    nome_dest    = dados.get("nome_destinatario", "").strip()
+    saud_txt     = f"{saud}, {nome_dest}." if nome_dest else f"{saud}."
+    nome_cliente = dados.get("nome_completo", "o cliente").strip()
+    nome_curto   = nome_cliente.split()[0] if nome_cliente else "o cliente"
+
+    renda = dados.get("renda_valor", "")
+    if renda and not str(renda).startswith("R$"):
+        renda = fmt_brl(renda)
+    renda_tipo   = dados.get("renda_tipo", "")
+    profissao    = dados.get("profissao", "")
+    tipo_garantia = dados.get("tipo_garantia", "")
+    estado_civil  = dados.get("estado_civil", "")
+    cpf           = dados.get("cpf", "")
+
+    assunto = f"Documentação para análise de locação — {nome_cliente}"
+
+    linhas = []
+    if cpf:           linhas.append(f"• CPF: {cpf}")
+    if estado_civil:  linhas.append(f"• Estado civil: {estado_civil}")
+    if profissao:     linhas.append(f"• Profissão: {profissao}")
+    if renda:
+        det = f" ({renda_tipo})" if renda_tipo else ""
+        linhas.append(f"• 💰 Renda mensal: {renda}{det}")
+    if tipo_garantia: linhas.append(f"• Garantia locatícia: {tipo_garantia}")
+    if dados.get("email"):    linhas.append(f"• 📧 E-mail: {dados['email']}")
+    if dados.get("telefone"): linhas.append(f"• 📱 Telefone: {dados['telefone']}")
+
+    campos_str = "\n".join(linhas)
+
+    return f"""Assunto: {assunto}
+
+{saud_txt}
+
+Encaminho a documentação do(a) cliente {nome_cliente} para análise de locação do imóvel.
+
+Informações do(a) cliente:
+
+{campos_str}
+
+Fico no aguardo do parecer.
+Obrigada."""
+
+
+# ══════════════════════════════════════════════════════
 # BLOCO 7 — INTERFACE STREAMLIT (PREMIUM REDESIGN)
 # ══════════════════════════════════════════════════════
 
@@ -902,55 +1021,115 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-# ── SEÇÃO 01 — Upload ──
-st.markdown("""
+# ── SELEÇÃO DE TIPO DE ATENDIMENTO ──
+if "tipo_atendimento" not in st.session_state:
+    st.markdown("""
+    <div style='max-width:560px;margin:32px auto 0 auto;background:#ffffff;
+         border-radius:16px;padding:36px 36px 28px 36px;
+         box-shadow:0 4px 20px rgba(0,0,0,0.08);text-align:center;'>
+        <div style='font-size:13px;font-weight:700;color:#1565C0;
+             text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>
+            Novo Atendimento
+        </div>
+        <div style='font-size:20px;font-weight:700;color:#1A1A2E;margin-bottom:6px;'>
+            Qual tipo de atendimento você deseja iniciar?
+        </div>
+        <div style='font-size:14px;color:#5C6B7A;margin-bottom:28px;'>
+            Selecione abaixo para carregar o fluxo correto
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("🏠  Crédito Imobiliário", use_container_width=True, type="primary"):
+            st.session_state["tipo_atendimento"] = "credito"
+            st.rerun()
+        st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Venda · Financiamento · FGTS</div>", unsafe_allow_html=True)
+    with col_b:
+        if st.button("🔑  Locação", use_container_width=True):
+            st.session_state["tipo_atendimento"] = "locacao"
+            st.rerun()
+        st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Aluguel · Análise de Inquilino</div>", unsafe_allow_html=True)
+
+    st.stop()
+
+tipo_atendimento = st.session_state.get("tipo_atendimento", "credito")
+
+# Badge do tipo ativo
+badge_cor  = "#1565C0" if tipo_atendimento == "credito" else "#2E7D32"
+badge_txt  = "🏠 Crédito Imobiliário" if tipo_atendimento == "credito" else "🔑 Locação"
+st.markdown(f"""
+<div style='display:flex;align-items:center;justify-content:space-between;
+     margin-bottom:4px;'>
+    <span style='background:{badge_cor};color:white;font-size:11px;font-weight:700;
+          padding:3px 12px;border-radius:20px;letter-spacing:0.5px;'>
+        {badge_txt}
+    </span>
+</div>
+""", unsafe_allow_html=True)
+
+# Botão trocar tipo
+if st.button("↩ Trocar tipo de atendimento", key="trocar_tipo"):
+    for key in ["tipo_atendimento","pdfs_gerados","email_gerado","processado","dados"]:
+        st.session_state.pop(key, None)
+    st.rerun()
+
+st.divider()
+
+# ══════════════════════════════════════════════════════
+# FLUXO A — CRÉDITO IMOBILIÁRIO (existente, sem alteração)
+# ══════════════════════════════════════════════════════
+if tipo_atendimento == "credito":
+  st.markdown("""
 <div class='card-section'>
     <span class='step-number'>01</span>
     <p class='section-title'>Envie os documentos do cliente</p>
     <p class='section-subtitle'>Imagens e PDFs — a IA identifica, organiza e renomeia automaticamente</p>
 </div>
 """, unsafe_allow_html=True)
-arquivos_upload = st.file_uploader(
+  arquivos_upload = st.file_uploader(
     "Arraste ou selecione os arquivos",
     accept_multiple_files=True,
     type=["jpg","jpeg","png","bmp","webp","tiff","pdf"]
-)
+  )
 
-# ── SEÇÃO 02 — Texto ──
-st.markdown("""
+  # ── SEÇÃO 02 — Texto ──
+  st.markdown("""
 <div class='card-section'>
     <span class='step-number'>02</span>
     <p class='section-title'>Informações adicionais do cliente</p>
     <p class='section-subtitle'>Cole mensagens do WhatsApp, anotações ou dados extras — a IA extrai o que for relevante</p>
 </div>
 """, unsafe_allow_html=True)
-texto_bruto = st.text_area(
+  texto_bruto = st.text_area(
     "",
     height=110,
     placeholder="Ex:\nGmail: cliente@gmail.com\nNIT 160.74503.57-6 | Tel: 81 9 9296-7781\nRenda informal R$2.550, 1 dependente, imóvel novo R$205.000...",
-    label_visibility="collapsed"
-)
+    label_visibility="collapsed",
+    key="texto_bruto_credito"
+  )
 
-# ── SEÇÃO 03 — Destinatário ──
-st.markdown("""
+  # ── SEÇÃO 03 — Destinatário ──
+  st.markdown("""
 <div class='card-section'>
     <span class='step-number'>03</span>
     <p class='section-title'>Para quem vai a documentação?</p>
     <p class='section-subtitle'>Nome do correspondente, banco ou gerente que vai receber o email</p>
 </div>
 """, unsafe_allow_html=True)
-st.text_input(
+  st.text_input(
     "",
     placeholder="Ex: Ana, Carlos, Caixa Econômica Federal...",
     key="nome_destinatario_input",
     label_visibility="collapsed"
-)
+  )
 
-# ── CTA PRINCIPAL ──
-st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-processar = st.button("⚡  ANALISAR E ORGANIZAR DOCUMENTAÇÃO", type="primary", use_container_width=True)
+  # ── CTA PRINCIPAL ──
+  st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+  processar = st.button("⚡  ANALISAR E ORGANIZAR DOCUMENTAÇÃO", type="primary", use_container_width=True, key="btn_processar_credito")
 
-if processar:
+  if processar:
     if not arquivos_upload:
         st.error("⚠️ Envie pelo menos um documento antes de continuar.")
     else:
@@ -959,18 +1138,16 @@ if processar:
             conteudo = arq.read()
             tipo     = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
             arquivos_bytes.append((arq.name, conteudo, tipo))
-
         barra = st.progress(0, text="📄 Lendo e organizando documentos...")
         pdfs_gerados = processar_documentos(arquivos_bytes)
         barra.progress(50, text="🔍 Extraindo dados do cliente...")
         nome_dest_input = st.session_state.get("nome_destinatario_input","")
-        dados  = extrair_dados(texto_bruto, arquivos_bytes, pdfs_gerados)
+        dados  = extrair_dados(st.session_state.get("texto_bruto_credito",""), arquivos_bytes, pdfs_gerados)
         dados["nome_destinatario"] = nome_dest_input
         barra.progress(85, text="✍️ Gerando email profissional...")
-        gerado = gerar_email(texto_bruto, dados, pdfs_gerados)
+        gerado = gerar_email(st.session_state.get("texto_bruto_credito",""), dados, pdfs_gerados)
         barra.progress(100, text="✅ Documentação pronta!")
         time.sleep(0.4); barra.empty()
-
         st.session_state["pdfs_gerados"] = pdfs_gerados
         st.session_state["email_gerado"] = gerado
         st.session_state["dados"]        = dados
@@ -979,22 +1156,17 @@ if processar:
         if cliente_sess:
             registrar_uso(cliente_sess, qtd_arquivos=len(arquivos_bytes))
 
-# ── RESULTADOS ──
-if st.session_state.get("processado"):
+  if st.session_state.get("processado"):
     pdfs_gerados = st.session_state["pdfs_gerados"]
     email_gerado = st.session_state["email_gerado"]
     dados        = st.session_state.get("dados", {})
-
     st.divider()
-
-    # — Checklist Premium —
     checklist = calcular_checklist([n for n,_ in pdfs_gerados], dados)
     if checklist['completo']:
         st.markdown("<div class='checklist-header-ok'>✅ Documentação completa — pronta para envio &nbsp;|&nbsp; Renda: " + checklist['tipo'] + "</div>", unsafe_allow_html=True)
     else:
         qtd_falta = len(checklist['faltando'])
         st.markdown(f"<div class='checklist-header-warn'>⚠️ {qtd_falta} item(s) pendente(s) — revise antes de enviar &nbsp;|&nbsp; Renda: {checklist['tipo']}</div>", unsafe_allow_html=True)
-
     with st.expander("Ver checklist completo", expanded=True):
         if checklist['ok']:
             st.markdown("<div style='font-size:12px;font-weight:700;color:#5C6B7A;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;'>Documentos presentes</div>", unsafe_allow_html=True)
@@ -1005,17 +1177,13 @@ if st.session_state.get("processado"):
             for i in checklist['faltando']:
                 cor = "checklist-aviso" if "⚠️" in i else "checklist-falta"
                 st.markdown(f"<span class='{cor}'>{i}</span>", unsafe_allow_html=True)
-
     st.divider()
-
-    # — Documentos organizados —
     st.markdown("""
     <div class='card-section-neutral'>
         <p class='section-title'>✅ Documentação organizada e pronta</p>
         <p class='section-subtitle'>Confira os arquivos gerados — desmarque duplicatas se necessário</p>
     </div>
     """, unsafe_allow_html=True)
-
     selecionados = []
     for nome, conteudo in pdfs_gerados:
         col1, col2 = st.columns([0.7, 0.3])
@@ -1025,7 +1193,6 @@ if st.session_state.get("processado"):
             st.download_button("⬇️ Baixar", data=conteudo, file_name=nome,
                                mime="application/pdf", key=f"dl_{nome}")
         if marcado: selecionados.append((nome, conteudo))
-
     if selecionados:
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, "w") as zf:
@@ -1035,17 +1202,13 @@ if st.session_state.get("processado"):
         st.download_button("⬇️ Baixar toda a documentação em ZIP", data=zip_buf,
                            file_name="documentos_cliente.zip", mime="application/zip",
                            use_container_width=True, key="zip_final")
-
     st.divider()
-
-    # — Email profissional —
     st.markdown("""
     <div class='card-section-neutral'>
         <p class='section-title'>✉️ Email profissional gerado automaticamente</p>
         <p class='section-subtitle'>Edite livremente antes de enviar</p>
     </div>
     """, unsafe_allow_html=True)
-
     assunto_inicial = "Documentação do Cliente"
     corpo_inicial   = email_gerado
     for linha in email_gerado.split('\n')[:5]:
@@ -1053,27 +1216,20 @@ if st.session_state.get("processado"):
             assunto_inicial = linha.split(':',1)[-1].strip().replace('**','').strip()
             corpo_inicial   = email_gerado.replace(linha,'').strip()
             break
-
-    assunto_edit = st.text_input("Assunto", value=assunto_inicial)
-    corpo_edit   = st.text_area("Corpo do email", value=corpo_inicial, height=280)
-
-    if st.button("📋 Copiar texto", use_container_width=True):
+    assunto_edit = st.text_input("Assunto", value=assunto_inicial, key="assunto_credito")
+    corpo_edit   = st.text_area("Corpo do email", value=corpo_inicial, height=280, key="corpo_credito")
+    if st.button("📋 Copiar texto", use_container_width=True, key="copiar_credito"):
         st.code(f"Assunto: {assunto_edit}\n\n{corpo_edit}", language=None)
         st.caption("☝️ Selecione tudo (Ctrl+A) e copie (Ctrl+C)")
-
     st.divider()
-
-    # — Envio —
     st.markdown("""
     <div class='card-section-neutral'>
         <p class='section-title'>🚀 Enviar ao correspondente</p>
     </div>
     """, unsafe_allow_html=True)
-
     cliente_sess = st.session_state.get("cliente", {})
     plano_atual  = cliente_sess.get("plano","free")
     is_pro       = plano_atual in ("mensal","semestral","anual")
-
     if not is_pro:
         LINK_MENSAL    = "https://kiwify.com.br/PLACEHOLDER_MENSAL"
         LINK_SEMESTRAL = "https://kiwify.com.br/PLACEHOLDER_SEMESTRAL"
@@ -1084,19 +1240,16 @@ if st.session_state.get("processado"):
             <div style='font-size:13px;color:#4A6080;'>Mais agilidade, menos retrabalho. Escolha seu plano e ative o envio automático:</div>
         </div>
         """, unsafe_allow_html=True)
-
         st.markdown(f"""<a href="{LINK_MENSAL}" target="_blank" style="display:block;text-align:center;
             padding:13px;background:#1565C0;color:white;border-radius:8px;
             text-decoration:none;font-weight:700;margin-bottom:8px;font-size:14px;
             box-shadow:0 4px 14px rgba(21,101,192,0.3);">
             📅 Mensal — R$ 97,00/mês</a>""", unsafe_allow_html=True)
-
         st.markdown(f"""<a href="{LINK_SEMESTRAL}" target="_blank" style="display:block;text-align:center;
             padding:13px;background:#2E7D32;color:white;border-radius:8px;
             text-decoration:none;font-weight:700;margin-bottom:8px;font-size:14px;
             box-shadow:0 4px 14px rgba(46,125,50,0.3);">
             📆 Semestral — R$ 83,00/mês</a>""", unsafe_allow_html=True)
-
         st.markdown(f"""<a href="{LINK_ANUAL}" target="_blank" style="display:block;text-align:center;
             padding:13px;background:#E65100;color:white;border-radius:8px;
             text-decoration:none;font-weight:700;margin-bottom:8px;font-size:14px;
@@ -1104,7 +1257,7 @@ if st.session_state.get("processado"):
             🏆 Anual — R$ 75,00/mês &nbsp;·&nbsp; ⭐ Mais escolhido</a>""", unsafe_allow_html=True)
     else:
         st.caption("Destino e Gmail configurados na barra lateral — pronto para enviar.")
-        if st.button("📧 Enviar ao correspondente agora", type="primary", use_container_width=True):
+        if st.button("📧 Enviar ao correspondente agora", type="primary", use_container_width=True, key="enviar_credito"):
             destino   = st.session_state.get("cfg_destino","")
             remetente = st.session_state.get("cfg_remetente","")
             senha     = st.session_state.get("cfg_senha","")
@@ -1125,17 +1278,217 @@ if st.session_state.get("processado"):
                     st.error("❌ Autenticação falhou. Verifique se está usando senha de APP do Gmail.")
                 except Exception as e:
                     st.error(f"❌ Erro ao enviar: {e}")
-
     st.divider()
-    if st.button("🔄 Novo atendimento", use_container_width=True):
-        for key in ["pdfs_gerados","email_gerado","processado","dados"]:
+    if st.button("🔄 Novo atendimento", use_container_width=True, key="novo_credito"):
+        for key in ["pdfs_gerados","email_gerado","processado","dados","tipo_atendimento"]:
+            if key in st.session_state: del st.session_state[key]
+        st.rerun()
+
+# ══════════════════════════════════════════════════════
+# FLUXO B — LOCAÇÃO (novo motor)
+# ══════════════════════════════════════════════════════
+elif tipo_atendimento == "locacao":
+
+  st.markdown("""
+<div class='card-section' style='border-left-color:#2E7D32;'>
+    <span class='step-number' style='background:#2E7D32;'>01</span>
+    <p class='section-title'>Envie os documentos do inquilino</p>
+    <p class='section-subtitle'>RG, CPF, comprovante de renda, residência e garantia — a IA identifica e organiza</p>
+</div>
+""", unsafe_allow_html=True)
+  arquivos_upload_loc = st.file_uploader(
+    "Arraste ou selecione os arquivos",
+    accept_multiple_files=True,
+    type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
+    key="upload_locacao"
+  )
+
+  st.markdown("""
+<div class='card-section' style='border-left-color:#2E7D32;'>
+    <span class='step-number' style='background:#2E7D32;'>02</span>
+    <p class='section-title'>Informações adicionais do inquilino</p>
+    <p class='section-subtitle'>Cole mensagens do WhatsApp, anotações ou dados extras</p>
+</div>
+""", unsafe_allow_html=True)
+  texto_loc = st.text_area(
+    "",
+    height=100,
+    placeholder="Ex:\nRenda informal R$3.200 | Garantia: seguro fiança\nTel: 81 9 9999-0000 | email@gmail.com",
+    label_visibility="collapsed",
+    key="texto_locacao"
+  )
+
+  st.markdown("""
+<div class='card-section' style='border-left-color:#2E7D32;'>
+    <span class='step-number' style='background:#2E7D32;'>03</span>
+    <p class='section-title'>Para quem vai a documentação?</p>
+    <p class='section-subtitle'>Nome da imobiliária, proprietário ou gestor que vai receber</p>
+</div>
+""", unsafe_allow_html=True)
+  st.text_input(
+    "",
+    placeholder="Ex: Imobiliária Central, Sr. João, Construtora...",
+    key="nome_dest_locacao",
+    label_visibility="collapsed"
+  )
+
+  st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+  processar_loc = st.button("⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO", type="primary", use_container_width=True, key="btn_processar_locacao")
+
+  if processar_loc:
+    if not arquivos_upload_loc:
+        st.error("⚠️ Envie pelo menos um documento antes de continuar.")
+    else:
+        arquivos_bytes_loc = []
+        for arq in arquivos_upload_loc:
+            conteudo = arq.read()
+            tipo     = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
+            arquivos_bytes_loc.append((arq.name, conteudo, tipo))
+        barra = st.progress(0, text="📄 Lendo e organizando documentos...")
+        pdfs_loc = processar_documentos(arquivos_bytes_loc)
+        barra.progress(50, text="🔍 Extraindo dados do inquilino...")
+        dados_loc = extrair_dados_locacao(st.session_state.get("texto_locacao",""), arquivos_bytes_loc, pdfs_loc)
+        dados_loc["nome_destinatario"] = st.session_state.get("nome_dest_locacao","")
+        barra.progress(85, text="✍️ Gerando email profissional...")
+        email_loc = gerar_email_locacao(dados_loc, pdfs_loc)
+        barra.progress(100, text="✅ Documentação pronta!")
+        time.sleep(0.4); barra.empty()
+        st.session_state["pdfs_gerados_loc"] = pdfs_loc
+        st.session_state["email_gerado_loc"] = email_loc
+        st.session_state["dados_loc"]        = dados_loc
+        st.session_state["processado_loc"]   = True
+        cliente_sess = st.session_state.get("cliente")
+        if cliente_sess:
+            registrar_uso(cliente_sess, qtd_arquivos=len(arquivos_bytes_loc))
+
+  if st.session_state.get("processado_loc"):
+    pdfs_loc  = st.session_state["pdfs_gerados_loc"]
+    email_loc = st.session_state["email_gerado_loc"]
+    dados_loc = st.session_state.get("dados_loc", {})
+    st.divider()
+    checklist_loc = calcular_checklist_locacao([n for n,_ in pdfs_loc], dados_loc)
+    if checklist_loc['completo']:
+        st.markdown("<div class='checklist-header-ok'>✅ Documentação completa — pronta para envio</div>", unsafe_allow_html=True)
+    else:
+        qtd_f = len(checklist_loc['faltando'])
+        st.markdown(f"<div class='checklist-header-warn'>⚠️ {qtd_f} item(s) pendente(s) — revise antes de enviar</div>", unsafe_allow_html=True)
+    with st.expander("Ver checklist completo", expanded=True):
+        if checklist_loc['ok']:
+            st.markdown("<div style='font-size:12px;font-weight:700;color:#5C6B7A;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;'>Documentos presentes</div>", unsafe_allow_html=True)
+            for i in checklist_loc['ok']:
+                st.markdown(f"<span class='checklist-ok'>{i}</span>", unsafe_allow_html=True)
+        if checklist_loc['faltando']:
+            st.markdown("<div style='font-size:12px;font-weight:700;color:#5C6B7A;text-transform:uppercase;letter-spacing:0.5px;margin:12px 0 6px 0;'>Pendências</div>", unsafe_allow_html=True)
+            for i in checklist_loc['faltando']:
+                cor = "checklist-aviso" if "⚠️" in i else "checklist-falta"
+                st.markdown(f"<span class='{cor}'>{i}</span>", unsafe_allow_html=True)
+    st.divider()
+    st.markdown("""
+    <div class='card-section-neutral'>
+        <p class='section-title'>✅ Documentação organizada e pronta</p>
+        <p class='section-subtitle'>Confira os arquivos gerados — desmarque duplicatas se necessário</p>
+    </div>
+    """, unsafe_allow_html=True)
+    selecionados_loc = []
+    for nome, conteudo in pdfs_loc:
+        col1, col2 = st.columns([0.7, 0.3])
+        with col1:
+            marcado = st.checkbox(f"📎 {nome}", value=True, key=f"cb_loc_{nome}")
+        with col2:
+            st.download_button("⬇️ Baixar", data=conteudo, file_name=nome,
+                               mime="application/pdf", key=f"dl_loc_{nome}")
+        if marcado: selecionados_loc.append((nome, conteudo))
+    if selecionados_loc:
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            for nome, conteudo in selecionados_loc:
+                zf.writestr(nome, conteudo)
+        zip_buf.seek(0)
+        st.download_button("⬇️ Baixar toda a documentação em ZIP", data=zip_buf,
+                           file_name="documentos_inquilino.zip", mime="application/zip",
+                           use_container_width=True, key="zip_loc")
+    st.divider()
+    st.markdown("""
+    <div class='card-section-neutral'>
+        <p class='section-title'>✉️ Email profissional gerado automaticamente</p>
+        <p class='section-subtitle'>Edite livremente antes de enviar</p>
+    </div>
+    """, unsafe_allow_html=True)
+    assunto_loc_ini = "Documentação para análise de locação"
+    corpo_loc_ini   = email_loc
+    for linha in email_loc.split('\n')[:5]:
+        if 'assunto' in linha.lower():
+            assunto_loc_ini = linha.split(':',1)[-1].strip()
+            corpo_loc_ini   = email_loc.replace(linha,'').strip()
+            break
+    assunto_loc_edit = st.text_input("Assunto", value=assunto_loc_ini, key="assunto_loc")
+    corpo_loc_edit   = st.text_area("Corpo do email", value=corpo_loc_ini, height=260, key="corpo_loc")
+    if st.button("📋 Copiar texto", use_container_width=True, key="copiar_loc"):
+        st.code(f"Assunto: {assunto_loc_edit}\n\n{corpo_loc_edit}", language=None)
+        st.caption("☝️ Selecione tudo (Ctrl+A) e copie (Ctrl+C)")
+    st.divider()
+    st.markdown("""
+    <div class='card-section-neutral'>
+        <p class='section-title'>🚀 Enviar à imobiliária / proprietário</p>
+    </div>
+    """, unsafe_allow_html=True)
+    cliente_sess_loc = st.session_state.get("cliente", {})
+    is_pro_loc = cliente_sess_loc.get("plano","free") in ("mensal","semestral","anual")
+    if not is_pro_loc:
+        LINK_MENSAL    = "https://kiwify.com.br/PLACEHOLDER_MENSAL"
+        LINK_SEMESTRAL = "https://kiwify.com.br/PLACEHOLDER_SEMESTRAL"
+        LINK_ANUAL     = "https://kiwify.com.br/PLACEHOLDER_ANUAL"
+        st.markdown("""
+        <div style='background:#EEF4FF;border:1px solid #BBCFEE;border-radius:10px;padding:16px 20px;margin-bottom:16px;'>
+            <div style='font-size:15px;font-weight:700;color:#1A3A6B;margin-bottom:4px;'>Envie diretamente à imobiliária com 1 clique</div>
+            <div style='font-size:13px;color:#4A6080;'>Mais agilidade, menos retrabalho. Escolha seu plano:</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown(f"""<a href="{LINK_MENSAL}" target="_blank" style="display:block;text-align:center;
+            padding:13px;background:#1565C0;color:white;border-radius:8px;
+            text-decoration:none;font-weight:700;margin-bottom:8px;font-size:14px;">
+            📅 Mensal — R$ 97,00/mês</a>""", unsafe_allow_html=True)
+        st.markdown(f"""<a href="{LINK_SEMESTRAL}" target="_blank" style="display:block;text-align:center;
+            padding:13px;background:#2E7D32;color:white;border-radius:8px;
+            text-decoration:none;font-weight:700;margin-bottom:8px;font-size:14px;">
+            📆 Semestral — R$ 83,00/mês</a>""", unsafe_allow_html=True)
+        st.markdown(f"""<a href="{LINK_ANUAL}" target="_blank" style="display:block;text-align:center;
+            padding:13px;background:#E65100;color:white;border-radius:8px;
+            text-decoration:none;font-weight:700;margin-bottom:8px;font-size:14px;">
+            🏆 Anual — R$ 75,00/mês &nbsp;·&nbsp; ⭐ Mais escolhido</a>""", unsafe_allow_html=True)
+    else:
+        st.caption("Destino e Gmail configurados na barra lateral — pronto para enviar.")
+        if st.button("📧 Enviar à imobiliária agora", type="primary", use_container_width=True, key="enviar_loc"):
+            destino   = st.session_state.get("cfg_destino","")
+            remetente = st.session_state.get("cfg_remetente","")
+            senha     = st.session_state.get("cfg_senha","")
+            if not destino or '@' not in destino:
+                st.error("❌ Configure o email destino na barra lateral.")
+            elif not remetente or '@' not in remetente:
+                st.error("❌ Configure seu Gmail na barra lateral.")
+            elif not senha:
+                st.error("❌ Configure a senha de app na barra lateral.")
+            else:
+                try:
+                    with st.spinner("📧 Enviando documentação..."):
+                        enviar_email(selecionados_loc, destino, remetente, senha, assunto_loc_edit, corpo_loc_edit)
+                    st.success(f"✅ Documentação enviada para {destino} — {len(selecionados_loc)} arquivo(s) anexado(s).")
+                    if cliente_sess_loc:
+                        registrar_uso(cliente_sess_loc, qtd_arquivos=len(selecionados_loc), email_enviado=True)
+                except smtplib.SMTPAuthenticationError:
+                    st.error("❌ Autenticação falhou. Use senha de APP do Gmail.")
+                except Exception as e:
+                    st.error(f"❌ Erro ao enviar: {e}")
+    st.divider()
+    if st.button("🔄 Novo atendimento", use_container_width=True, key="novo_loc"):
+        for key in ["pdfs_gerados_loc","email_gerado_loc","processado_loc","dados_loc","tipo_atendimento"]:
             if key in st.session_state: del st.session_state[key]
         st.rerun()
 
 # ── Rodapé institucional ──
 st.markdown("""
 <div class='footer-inst'>
-    ImobFlow © 2025 &nbsp;·&nbsp; Plataforma especializada em documentação para crédito imobiliário<br>
+    ImobFlow © 2025 &nbsp;·&nbsp; Plataforma especializada em documentação para crédito imobiliário e locação<br>
     Solução profissional para correspondentes bancários e imobiliárias
 </div>
 """, unsafe_allow_html=True)
