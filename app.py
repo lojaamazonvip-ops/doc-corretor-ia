@@ -691,7 +691,7 @@ def enviar_email(pdfs_selecionados, destino, remetente, senha, assunto, corpo):
 # BLOCO 7 — INTERFACE STREAMLIT
 # ══════════════════════════════════════════════════════
 
-exibir_logo(altura=120)
+exibir_logo(altura=220)
 st.caption("<div style='text-align:center'>Organize, identifique e envie documentos imobiliários com IA</div>", unsafe_allow_html=True)
 
 # ── Banner contador de dias (só para FREE) ──
