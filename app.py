@@ -638,8 +638,8 @@ if st.session_state.get("processado"):
                 except Exception as e:
                     st.error(f"❌ Erro ao enviar: {e}")
 
-    with col_cancel:
-        if st.button("🔄 Novo processo", use_container_width=True):
-            for key in ["pdfs_gerados","email_gerado","processado","dados"]:
-                if key in st.session_state: del st.session_state[key]
-            st.rerun()
+    st.divider()
+    if st.button("🔄 Novo processo", use_container_width=True):
+        for key in ["pdfs_gerados","email_gerado","processado","dados"]:
+            if key in st.session_state: del st.session_state[key]
+        st.rerun()
