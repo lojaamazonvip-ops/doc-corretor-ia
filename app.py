@@ -988,26 +988,29 @@ RETORNE APENAS JSON válido (sem markdown, sem explicações):
                   {"inline_data": {"mime_type": mime, "data": b64}}]
     try:
         resp = chamar_gemini(parts)
+        # Debug — salva resposta bruta para diagnóstico
+        import streamlit as _st
+        _st.session_state[f"debug_resp_{polo}"] = resp[:500]
         # Limpeza robusta do JSON
         texto = resp.strip()
-        # Remove markdown
         texto = texto.replace('```json','').replace('```','').strip()
-        # Extrai apenas o bloco JSON se houver texto ao redor
         inicio = texto.find('{')
         fim    = texto.rfind('}')
         if inicio != -1 and fim != -1:
             texto = texto[inicio:fim+1]
         dados_brutos = json.loads(texto)
         resultado = {k: dados_brutos.get(k, "") for k in cfg['campos']}
-        # Normaliza CPF — aceita com ou sem máscara
+        # Normaliza CPF
+        import re
         cpf_raw = resultado.get("cpf", "")
         if cpf_raw:
-            import re
             digitos = re.sub(r'\D','', str(cpf_raw))
             if len(digitos) == 11:
                 resultado["cpf"] = f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
         return resultado
-    except:
+    except Exception as _e:
+        import streamlit as _st
+        _st.warning(f"⚠️ Falha ao extrair dados do {polo}: {_e}")
         return {k: "" for k in cfg['campos']}
 
 def mini_checklist_polo(dados, polo):
@@ -1979,6 +1982,14 @@ elif tipo_atendimento == "locacao":
             ok_f, falta_f = mini_checklist_polo(dados_fiador_r, "fiador")
             for i in ok_f:   st.markdown(f"<span style='color:#2E7D32;font-size:12px;'>{i}</span>", unsafe_allow_html=True)
             for i in falta_f: st.markdown(f"<span style='color:#C62828;font-size:12px;'>{i}</span>", unsafe_allow_html=True)
+
+    # — Debug diagnóstico (temporário) —
+    with st.expander("🔧 Diagnóstico técnico (suporte)", expanded=False):
+        for polo_d in ["locador","locatario","fiador"]:
+            raw = st.session_state.get(f"debug_resp_{polo_d}")
+            if raw:
+                st.markdown(f"**Retorno bruto IA — {polo_d}:**")
+                st.code(raw, language="json")
     st.divider()
     st.markdown("""
     <div class='card-section-neutral'>
