@@ -1172,19 +1172,19 @@ def extrair_dados_polo(arquivos_bytes, polo, texto_bruto=""):
     """Extrai dados de um polo jurídico específico de forma isolada."""
     campos_por_polo = {
         "locador": {
-            "campos": ["nome_completo","cpf","estado_civil","endereco","telefone","email"],
+            "campos": ["nome_completo","cpf","rg","orgao_expedidor","estado_civil","endereco","profissao","telefone","email"],
             "foco": "LOCADOR (proprietário do imóvel)",
-            "campos_json": '{"nome_completo":"","cpf":"","estado_civil":"","endereco":"","telefone":"","email":""}'
+            "campos_json": '{"nome_completo":"","cpf":"","rg":"","orgao_expedidor":"","estado_civil":"","endereco":"","profissao":"","telefone":"","email":""}'
         },
         "locatario": {
-            "campos": ["nome_completo","cpf","estado_civil","profissao","renda_valor","renda_tipo","telefone","email","tipo_garantia"],
+            "campos": ["nome_completo","cpf","rg","orgao_expedidor","estado_civil","profissao","renda_valor","renda_tipo","endereco","telefone","email","tipo_garantia"],
             "foco": "LOCATÁRIO (inquilino)",
-            "campos_json": '{"nome_completo":"","cpf":"","estado_civil":"","profissao":"","renda_valor":"","renda_tipo":"","telefone":"","email":"","tipo_garantia":""}'
+            "campos_json": '{"nome_completo":"","cpf":"","rg":"","orgao_expedidor":"","estado_civil":"","profissao":"","renda_valor":"","renda_tipo":"","endereco":"","telefone":"","email":"","tipo_garantia":""}'
         },
         "fiador": {
-            "campos": ["nome_completo","cpf","estado_civil","profissao","renda_valor","endereco","telefone","email","imovel_proprio"],
+            "campos": ["nome_completo","cpf","rg","orgao_expedidor","estado_civil","profissao","renda_valor","endereco","telefone","email","imovel_proprio"],
             "foco": "FIADOR (garantidor da locação)",
-            "campos_json": '{"nome_completo":"","cpf":"","estado_civil":"","profissao":"","renda_valor":"","endereco":"","telefone":"","email":"","imovel_proprio":""}'
+            "campos_json": '{"nome_completo":"","cpf":"","rg":"","orgao_expedidor":"","estado_civil":"","profissao":"","renda_valor":"","endereco":"","telefone":"","email":"","imovel_proprio":""}'
         },
     }
     cfg = campos_por_polo.get(polo, campos_por_polo["locatario"])
@@ -1277,7 +1277,36 @@ def mini_checklist_polo(dados, polo):
 
 
 
+def _bloco_polo_email(titulo, dados):
+    """Gera bloco de dados de um polo no padrão de listagem detalhada."""
+    if not dados or not dados.get("nome_completo"):
+        return ""
+    linhas = [f"{titulo}"]
+    if dados.get("nome_completo"):  linhas.append(f"* Nome completo: {dados['nome_completo']}")
+    if dados.get("cpf"):            linhas.append(f"* CPF: {dados['cpf']}")
+    rg = dados.get("rg", "")
+    orgao = dados.get("orgao_expedidor", "")
+    if rg or orgao:
+        rg_txt = rg
+        if orgao: rg_txt += f" – {orgao}" if rg else orgao
+        linhas.append(f"* RG / Órgão expedidor: {rg_txt}")
+    if dados.get("endereco"):       linhas.append(f"* Endereço: {dados['endereco']}")
+    if dados.get("estado_civil"):   linhas.append(f"* Estado civil: {dados['estado_civil']}")
+    if dados.get("profissao"):      linhas.append(f"* Profissão: {dados['profissao']}")
+    renda = dados.get("renda_valor", "")
+    if renda:
+        if not str(renda).startswith("R$"):
+            renda = fmt_brl(renda)
+        renda_tipo = dados.get("renda_tipo", "")
+        det = f" ({renda_tipo})" if renda_tipo else ""
+        linhas.append(f"* Renda mensal: {renda}{det}")
+    if dados.get("telefone"):       linhas.append(f"* Telefone: {dados['telefone']}")
+    if dados.get("email"):          linhas.append(f"* E-mail: {dados['email']}")
+    return "\n".join(linhas)
+
+
 def gerar_email_locacao(dados, pdfs_selecionados, imovel=None):
+    import streamlit as _st
     hora = datetime.now(timezone(timedelta(hours=-3))).hour
     if 6 <= hora < 12:    saud = "Bom dia"
     elif 12 <= hora < 18: saud = "Boa tarde"
@@ -1287,40 +1316,33 @@ def gerar_email_locacao(dados, pdfs_selecionados, imovel=None):
     saud_txt     = f"{saud}, {nome_dest}." if nome_dest else f"{saud}."
     nome_cliente = dados.get("nome_completo", "o cliente").strip()
 
-    renda = dados.get("renda_valor", "")
-    if renda and not str(renda).startswith("R$"):
-        renda = fmt_brl(renda)
-    renda_tipo    = dados.get("renda_tipo", "")
-    profissao     = dados.get("profissao", "")
-    tipo_garantia = dados.get("tipo_garantia", "")
-    estado_civil  = dados.get("estado_civil", "")
-    cpf           = dados.get("cpf", "")
-
     assunto = f"Documentação para análise de locação — {nome_cliente}"
 
-    linhas = []
-    if cpf:           linhas.append(f"• CPF: {cpf}")
-    if estado_civil:  linhas.append(f"• Estado civil: {estado_civil}")
-    if profissao:     linhas.append(f"• Profissão: {profissao}")
-    if renda:
-        det = f" ({renda_tipo})" if renda_tipo else ""
-        linhas.append(f"• 💰 Renda mensal: {renda}{det}")
-    if tipo_garantia: linhas.append(f"• Garantia locatícia: {tipo_garantia}")
-    if dados.get("email"):    linhas.append(f"• 📧 E-mail: {dados['email']}")
-    if dados.get("telefone"): linhas.append(f"• 📱 Telefone: {dados['telefone']}")
-    campos_str = "\n".join(linhas)
+    # Recupera dados de cada polo do session_state
+    dados_locatario = _st.session_state.get("dados_locatario", dados)
+    dados_fiador    = _st.session_state.get("dados_fiador", {})
+    dados_locador   = _st.session_state.get("dados_locador", {})
 
-    bloco_imovel = gerar_bloco_email_imovel(imovel) if imovel else ""
+    # Garantia locatícia
+    tipo_garantia = dados.get("tipo_garantia", "")
+
+    bloco_locatario = _bloco_polo_email("DADOS DO(A) LOCATÁRIO(A)", dados_locatario)
+    bloco_fiador    = _bloco_polo_email("DADOS DO(A) FIADOR(A)", dados_fiador) if dados_fiador else ""
+    bloco_locador   = _bloco_polo_email("DADOS DO(A) PROPRIETÁRIO(A)", dados_locador) if dados_locador else ""
+    bloco_imovel    = gerar_bloco_email_imovel(imovel) if imovel else ""
+
+    blocos = [b for b in [bloco_locatario, bloco_fiador, bloco_locador] if b]
+    corpo_polos = "\n\n".join(blocos)
+
+    garantia_linha = f"\nGarantia locatícia: {tipo_garantia}\n" if tipo_garantia else ""
 
     return f"""Assunto: {assunto}
 
 {saud_txt}
 
-Encaminho a documentação do(a) cliente {nome_cliente} para análise de locação do imóvel.
-
-Informações do(a) cliente:
-
-{campos_str}
+Encaminho a documentação para análise de locação do imóvel.
+{garantia_linha}
+{corpo_polos}
 {bloco_imovel}
 
 Fico no aguardo do parecer.
