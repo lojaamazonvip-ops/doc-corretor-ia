@@ -707,20 +707,31 @@ def calcular_checklist_locacao(nomes_pdfs, dados=None, imovel=None):
     docs = set(n.replace('.pdf','').lower() for n in nomes_pdfs)
     obrig = {
         "Documento de Identificação (RG ou CNH)" : ["rg","cnh","identidade"],
-        "CPF"                                    : ["cpf"],
         "Comprovante de Renda"                   : ["holerite","extrato","contracheque","decore","recibo","pro_labore"],
         "Comprovante de Residência"              : ["comprovante_residencia"],
-        "Garantia Locatícia (Fiador/Caução/Seguro Fiança)" : ["fiador","caucao","seguro_fianca","carta_fianca","termo_caucao"],
     }
     ok = []; faltando = []
     for nome, chaves in obrig.items():
         enc = any(any(c in d for d in docs) for c in chaves)
         (ok if enc else faltando).append(f"{'✅' if enc else '❌'} {nome}")
+
+    # CPF — obrigatório, valida pelos dados extraídos pela IA
+    if dados and dados.get("cpf"):
+        ok.append(f"✅ CPF identificado: {dados['cpf']}")
+    else:
+        faltando.append("❌ CPF — não identificado nos documentos")
+
+    # Garantia — só aparece se houver documentos de garantia enviados
+    garantia_docs = ["fiador","caucao","seguro_fianca","carta_fianca","termo_caucao"]
+    tem_garantia_doc = any(any(c in d for d in docs) for c in garantia_docs)
+    if tem_garantia_doc:
+        ok.append("✅ Garantia Locatícia documentada")
+
+    # Email e telefone — informativos, não obrigatórios
     if dados:
-        if dados.get("email"):    ok.append("✅ E-mail do participante")
-        else: faltando.append("❌ E-mail do participante — obrigatório")
-        if dados.get("telefone"): ok.append("✅ Telefone do participante")
-        else: faltando.append("❌ Telefone do participante — obrigatório")
+        if dados.get("email"):    ok.append(f"✅ E-mail: {dados['email']}")
+        if dados.get("telefone"): ok.append(f"✅ Telefone: {dados['telefone']}")
+
     # Campos do imóvel
     if imovel:
         if imovel.get("finalidade"): ok.append("✅ Finalidade definida")
@@ -728,9 +739,9 @@ def calcular_checklist_locacao(nomes_pdfs, dados=None, imovel=None):
         if imovel.get("area"):       ok.append(f"✅ Área informada ({imovel['area']}m²)")
         else: faltando.append("❌ Área do imóvel — obrigatória para cláusula")
         if imovel.get("fotos"):      ok.append(f"✅ Fotos anexadas ({imovel['fotos']} foto(s))")
-        else: faltando.append("⚠️ Fotos do imóvel — recomendado para vistoria")
+        else: ok.append("⚠️ Fotos do imóvel — recomendado para vistoria")
         if imovel.get("vistoria_gerada"): ok.append("✅ Termo de vistoria gerado")
-        else: faltando.append("⚠️ Termo de vistoria — será gerado após processamento")
+
     return {"ok": ok, "faltando": faltando, "completo": len(faltando) == 0}
 
 
@@ -939,6 +950,214 @@ CAMPOS_LOCACAO = {
     "renda_valor", "renda_tipo", "telefone", "email",
     "tipo_garantia", "nome_destinatario"
 }
+
+def gerar_contrato_pdf(dados_locador, dados_locatario, dados_fiador, imovel, clausula_dest):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    import io as _io
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=3*cm, rightMargin=3*cm,
+                            topMargin=2.5*cm, bottomMargin=2.5*cm)
+    styles = getSampleStyleSheet()
+    title_s  = ParagraphStyle("T",  parent=styles["Heading1"], fontSize=13, alignment=1, spaceAfter=4)
+    sub_s    = ParagraphStyle("S",  parent=styles["Normal"],   fontSize=10, alignment=1, textColor=colors.HexColor("#5C6B7A"), spaceAfter=10)
+    h2_s     = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=11, spaceBefore=14, spaceAfter=4)
+    body_s   = ParagraphStyle("B",  parent=styles["Normal"],   fontSize=10, leading=16, spaceAfter=6)
+    note_s   = ParagraphStyle("N",  parent=styles["Normal"],   fontSize=8,  textColor=colors.HexColor("#888888"), spaceAfter=4, leading=11)
+    bold_s   = ParagraphStyle("Bo", parent=styles["Normal"],   fontSize=10, fontName="Helvetica-Bold", spaceAfter=4)
+    center_s = ParagraphStyle("C",  parent=styles["Normal"],   fontSize=10, alignment=1, spaceAfter=4)
+
+    data_hoje  = datetime.now(timezone(timedelta(hours=-3))).strftime("%d/%m/%Y")
+    data_inicio = imovel.get("data_inicio", data_hoje)
+    duracao     = imovel.get("duracao_contrato","12 meses")
+    finalidade  = imovel.get("finalidade","")
+    tipo_imovel = imovel.get("tipo_imovel","imóvel")
+    area        = imovel.get("area","")
+    matricula   = imovel.get("matricula","")
+    valor       = imovel.get("valor_aluguel", 0)
+    dia_venc    = imovel.get("dia_vencimento", 5)
+    forma_pag   = imovel.get("forma_pagamento","")
+    pix         = imovel.get("pix_dados", {})
+
+    # Formata valor
+    try:    valor_fmt = f"R$ {float(valor):,.2f}".replace(",","X").replace(".",",").replace("X",".")
+    except: valor_fmt = str(valor)
+
+    nome_loc  = dados_locador.get("nome_completo","_________________________")
+    cpf_loc   = dados_locador.get("cpf","___.___.___-__")
+    eciv_loc  = dados_locador.get("estado_civil","")
+    end_loc   = dados_locador.get("endereco","")
+
+    nome_locat  = dados_locatario.get("nome_completo","_________________________")
+    cpf_locat   = dados_locatario.get("cpf","___.___.___-__")
+    eciv_locat  = dados_locatario.get("estado_civil","")
+    prof_locat  = dados_locatario.get("profissao","")
+
+    nome_fiad = dados_fiador.get("nome_completo","") if dados_fiador else ""
+    cpf_fiad  = dados_fiador.get("cpf","") if dados_fiador else ""
+
+    story = []
+
+    # Cabeçalho
+    story.append(Paragraph("CONTRATO DE LOCAÇÃO DE IMÓVEL", title_s))
+    tipo_txt = f"{finalidade} — {tipo_imovel}" if finalidade else tipo_imovel
+    story.append(Paragraph(f"{tipo_txt}{f' | Área: {area}m²' if area else ''}", sub_s))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1565C0"), spaceAfter=10))
+
+    # Qualificação — Locador
+    story.append(Paragraph("CLÁUSULA 1ª — DAS PARTES", h2_s))
+    story.append(Paragraph("<b>LOCADOR:</b>", bold_s))
+    loc_info = f"{nome_loc}, CPF nº {cpf_loc}"
+    if eciv_loc: loc_info += f", {eciv_loc}"
+    if end_loc:  loc_info += f", residente em {end_loc}"
+    story.append(Paragraph(loc_info + ", doravante denominado simplesmente LOCADOR.", body_s))
+
+    story.append(Paragraph("<b>LOCATÁRIO:</b>", bold_s))
+    locat_info = f"{nome_locat}, CPF nº {cpf_locat}"
+    if eciv_locat: locat_info += f", {eciv_locat}"
+    if prof_locat: locat_info += f", {prof_locat}"
+    story.append(Paragraph(locat_info + ", doravante denominado simplesmente LOCATÁRIO.", body_s))
+
+    if nome_fiad:
+        story.append(Paragraph("<b>FIADOR:</b>", bold_s))
+        fiad_info = f"{nome_fiad}, CPF nº {cpf_fiad}" if cpf_fiad else nome_fiad
+        story.append(Paragraph(fiad_info + ", doravante denominado simplesmente FIADOR.", body_s))
+
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#DDDDDD"), spaceAfter=6))
+
+    # Objeto
+    story.append(Paragraph("CLÁUSULA 2ª — DO OBJETO", h2_s))
+    mat_txt  = f", matriculado sob nº {matricula} no Cartório de Registro de Imóveis competente," if matricula else ""
+    area_txt = f" com área de {area}m²" if area else ""
+    story.append(Paragraph(
+        f"O presente contrato tem por objeto a locação do imóvel{mat_txt} do tipo {tipo_imovel}{area_txt}, "
+        f"destinado para fins {finalidade.lower() if finalidade else 'de locação'}, "
+        f"nos termos da Lei nº 8.245/91.", body_s))
+
+    # Destinação
+    story.append(Paragraph("CLÁUSULA 3ª — DA DESTINAÇÃO", h2_s))
+    story.append(Paragraph(clausula_dest.replace("CLÁUSULA DE DESTINAÇÃO DO IMÓVEL\n",""), body_s))
+
+    # Prazo
+    story.append(Paragraph("CLÁUSULA 4ª — DO PRAZO", h2_s))
+    if duracao == "Indeterminado":
+        story.append(Paragraph(
+            f"A presente locação é por prazo indeterminado, com início em {data_inicio}, "
+            f"podendo ser rescindida por qualquer das partes mediante aviso prévio de 30 (trinta) dias, "
+            f"nos termos do Art. 6º da Lei nº 8.245/91.", body_s))
+    else:
+        meses = duracao.replace(" meses","")
+        story.append(Paragraph(
+            f"A presente locação é por prazo determinado de {duracao}, com início em {data_inicio}, "
+            f"renovando-se automaticamente por igual período caso não haja manifestação contrária "
+            f"de qualquer das partes com 30 (trinta) dias de antecedência.", body_s))
+
+    # Valor e pagamento
+    story.append(Paragraph("CLÁUSULA 5ª — DO ALUGUEL E FORMA DE PAGAMENTO", h2_s))
+    story.append(Paragraph(
+        f"O aluguel mensal é de <b>{valor_fmt}</b>, a ser pago até o dia <b>{dia_venc}</b> de cada mês, "
+        f"através de <b>{forma_pag}</b>.", body_s))
+
+    if forma_pag == "PIX" and pix:
+        chave   = pix.get("chave","")
+        favore  = pix.get("favorecido","")
+        banco   = pix.get("banco","")
+        tipo_k  = pix.get("tipo","")
+        pix_linhas = []
+        if favore: pix_linhas.append(["Favorecido:", favore])
+        if chave:  pix_linhas.append([f"Chave PIX ({tipo_k}):", chave])
+        if banco:  pix_linhas.append(["Banco:", banco])
+        if pix_linhas:
+            story.append(Paragraph("Dados para pagamento via PIX:", bold_s))
+            t = Table(pix_linhas, colWidths=[4.5*cm, 11*cm])
+            t.setStyle(TableStyle([
+                ("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
+                ("FONTNAME",(1,0),(1,-1),"Helvetica"),
+                ("FONTSIZE",(0,0),(-1,-1),10),
+                ("BOTTOMPADDING",(0,0),(-1,-1),4),
+                ("TOPPADDING",(0,0),(-1,-1),4),
+            ]))
+            story.append(t)
+            story.append(Spacer(1,0.2*cm))
+
+    # Reajuste
+    story.append(Paragraph("CLÁUSULA 6ª — DO REAJUSTE", h2_s))
+    story.append(Paragraph(
+        "O valor do aluguel será reajustado anualmente pelo índice IGP-M/FGV acumulado nos últimos 12 (doze) meses, "
+        "ou por outro índice legal que vier a substituí-lo.", body_s))
+
+    # Encargos
+    story.append(Paragraph("CLÁUSULA 7ª — DOS ENCARGOS", h2_s))
+    story.append(Paragraph(
+        "São de responsabilidade do LOCATÁRIO: o pagamento das contas de água, energia elétrica, gás, "
+        "telefone, internet e demais serviços utilizados no imóvel, bem como o IPTU e taxas condominiais, "
+        "salvo convenção em contrário expressa neste instrumento.", body_s))
+
+    # Rescisão
+    story.append(Paragraph("CLÁUSULA 8ª — DA RESCISÃO", h2_s))
+    story.append(Paragraph(
+        "O descumprimento de qualquer cláusula deste contrato faculta à parte inocente rescindi-lo de pleno direito, "
+        "exigindo as perdas e danos cabíveis. Em caso de rescisão antecipada pelo LOCATÁRIO, "
+        "será devida multa proporcional ao tempo restante do contrato, nos termos do Art. 4º da Lei nº 8.245/91.", body_s))
+
+    # Fiança (se houver)
+    if nome_fiad:
+        story.append(Paragraph("CLÁUSULA 9ª — DA FIANÇA", h2_s))
+        story.append(Paragraph(
+            f"O FIADOR, {nome_fiad}{f', CPF nº {cpf_fiad}' if cpf_fiad else ''}, "
+            "obriga-se como garantidor solidário de todas as obrigações assumidas pelo LOCATÁRIO neste contrato, "
+            "incluindo aluguéis, encargos, multas e danos ao imóvel, renunciando ao benefício de ordem "
+            "previsto no Art. 827 do Código Civil.", body_s))
+
+    # Foro
+    story.append(Paragraph(f"CLÁUSULA {'10ª' if nome_fiad else '9ª'} — DO FORO", h2_s))
+    story.append(Paragraph(
+        "As partes elegem o foro da comarca do imóvel locado para dirimir quaisquer dúvidas ou litígios "
+        "oriundos deste contrato, renunciando a qualquer outro, por mais privilegiado que seja.", body_s))
+
+    story.append(Spacer(1, 0.3*cm))
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#DDDDDD"), spaceAfter=8))
+    story.append(Paragraph(
+        f"E por estarem assim justos e contratados, firmam o presente instrumento em 2 (duas) vias de igual teor, "
+        f"na cidade, aos {data_hoje}.", body_s))
+    story.append(Paragraph(
+        "Nota: Este documento foi gerado com base nas informações fornecidas pelas partes. "
+        "Recomenda-se revisão por assessoria jurídica antes da assinatura.", note_s))
+
+    story.append(Spacer(1, 1.5*cm))
+    assin = [
+        ["_______________________________", "    ", "_______________________________"],
+        [nome_loc or "LOCADOR",             "    ", nome_locat or "LOCATÁRIO"],
+        [f"CPF: {cpf_loc}",                 "    ", f"CPF: {cpf_locat}"],
+    ]
+    if nome_fiad:
+        assin += [
+            ["", "", ""],
+            ["_______________________________", "", ""],
+            [nome_fiad, "", ""],
+            [f"CPF: {cpf_fiad}" if cpf_fiad else "FIADOR", "", ""],
+        ]
+    ta = Table(assin, colWidths=[7.5*cm, 1*cm, 7.5*cm])
+    ta.setStyle(TableStyle([
+        ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
+        ("FONTNAME",(0,1),(0,1),"Helvetica-Bold"),
+        ("FONTNAME",(2,1),(2,1),"Helvetica-Bold"),
+        ("FONTSIZE",(0,0),(-1,-1),9),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),
+        ("BOTTOMPADDING",(0,0),(-1,-1),3),
+        ("TOPPADDING",(0,0),(-1,-1),3),
+    ]))
+    story.append(ta)
+
+    doc.build(story)
+    buf.seek(0)
+    return buf.read()
+
 
 def extrair_dados_locacao(texto_bruto, arquivos_bytes, pdfs_gerados):
     """Mantida para compatibilidade — usa extrair_dados_polo internamente."""
@@ -1645,8 +1864,7 @@ elif tipo_atendimento == "locacao":
           st.caption(f"📎 {len(upload_locatario)} arquivo(s) do locatário selecionado(s)")
 
   # ── BLOCO 03 — FIADOR (condicional) ──
-  tipo_garantia_input = st.session_state.get("texto_locacao", "").lower()
-  tem_fiador = "fiador" in tipo_garantia_input
+  tem_fiador = st.checkbox("🤝 Há fiador neste contrato?", key="tem_fiador_check")
 
   upload_fiador = []
   if tem_fiador:
@@ -1837,10 +2055,57 @@ elif tipo_atendimento == "locacao":
 
   imovel_dados["fotos"] = len(fotos_upload) if fotos_upload else 0
 
+  # ── BLOCO 08 — Condições Financeiras ──
+  st.markdown("""
+<div class='card-section' style='border-left-color:#2E7D32;'>
+    <span class='step-number' style='background:#2E7D32;'>08</span>
+    <p class='section-title'>💰 Condições financeiras do contrato</p>
+    <p class='section-subtitle'>Valor, forma de pagamento e prazo — usados para gerar o contrato</p>
+</div>
+""", unsafe_allow_html=True)
+
+  col_val, col_venc = st.columns(2)
+  with col_val:
+      valor_aluguel = st.number_input("Valor do aluguel (R$)", min_value=0.0, step=50.0, format="%.2f", key="valor_aluguel")
+  with col_venc:
+      dia_vencimento = st.number_input("Dia de vencimento", min_value=1, max_value=28, value=5, step=1, key="dia_vencimento")
+
+  col_pag, col_dur = st.columns(2)
+  with col_pag:
+      forma_pagamento = st.selectbox("Forma de pagamento", ["PIX","Boleto","Transferência bancária","Dinheiro"], key="forma_pagamento")
+  with col_dur:
+      duracao_contrato = st.selectbox("Duração do contrato", ["12 meses","24 meses","30 meses","36 meses","Indeterminado"], key="duracao_contrato")
+
+  data_inicio = st.date_input("Data de início do contrato", key="data_inicio_contrato")
+
+  # Dados PIX — aparecem condicionalmente
+  pix_dados = {}
+  if forma_pagamento == "PIX":
+      st.markdown("<div style='background:#F0F7F0;border-radius:8px;padding:14px;margin-top:6px;'>", unsafe_allow_html=True)
+      st.markdown("<div style='font-size:13px;font-weight:700;color:#1A1A2E;margin-bottom:8px;'>🔑 Dados PIX do Locador</div>", unsafe_allow_html=True)
+      col_p1, col_p2 = st.columns(2)
+      with col_p1:
+          pix_chave    = st.text_input("Chave PIX", placeholder="CPF, e-mail, telefone ou aleatória", key="pix_chave")
+          pix_favorecido = st.text_input("Nome do favorecido", placeholder="Nome completo do Locador", key="pix_favorecido")
+      with col_p2:
+          pix_banco    = st.text_input("Banco", placeholder="Ex: Nubank, Caixa, Bradesco...", key="pix_banco")
+          pix_tipo     = st.selectbox("Tipo de chave", ["CPF","CNPJ","E-mail","Telefone","Chave aleatória"], key="pix_tipo")
+      st.markdown("</div>", unsafe_allow_html=True)
+      pix_dados = {"chave": pix_chave, "favorecido": pix_favorecido, "banco": pix_banco, "tipo": pix_tipo}
+
+  imovel_dados.update({
+      "valor_aluguel": valor_aluguel,
+      "dia_vencimento": dia_vencimento,
+      "forma_pagamento": forma_pagamento,
+      "duracao_contrato": duracao_contrato,
+      "data_inicio": str(data_inicio),
+      "pix_dados": pix_dados,
+  })
+
   # Validação de área obrigatória
   area_val = imovel_dados.get("area", "")
   if finalidade_imovel and not area_val:
-      st.warning("⚠️ Área do imóvel é obrigatória para gerar a cláusula contratual.")
+      st.warning("⚠️ Área do imóvel é obrigatória para gerar o contrato.")
 
   st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
   processar_loc = st.button("⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO", type="primary", use_container_width=True, key="btn_processar_locacao")
@@ -2062,20 +2327,43 @@ elif tipo_atendimento == "locacao":
         if fotos_nomes_loc:
             st.caption(f"📷 Total de fotos anexadas: {len(fotos_nomes_loc)}")
 
-    # — Cláusula Contratual —
-    if clausula_loc:
-        st.divider()
-        st.markdown("""
+    # — Gerar Contrato —
+    st.divider()
+    st.markdown("""
     <div class='card-section-neutral'>
-        <p class='section-title'>⚖️ Cláusula contratual gerada automaticamente</p>
-        <p class='section-subtitle'>Baseada na Lei nº 8.245/91 — revise com assessoria jurídica antes de assinar</p>
+        <p class='section-title'>📄 Contrato de Locação</p>
+        <p class='section-subtitle'>Gerado com os dados extraídos e condições financeiras informadas</p>
     </div>
     """, unsafe_allow_html=True)
-        st.text_area("", value=clausula_loc, height=180, key="clausula_display",
-                     label_visibility="collapsed")
-        if st.button("📋 Copiar cláusula", use_container_width=True, key="copiar_clausula"):
-            st.code(clausula_loc, language=None)
-            st.caption("☝️ Selecione tudo (Ctrl+A) e copie (Ctrl+C)")
+
+    imovel_loc_atual = st.session_state.get("imovel_loc", {})
+    valor_cont = imovel_loc_atual.get("valor_aluguel", 0)
+    if not valor_cont or float(valor_cont) == 0:
+        st.warning("⚠️ Informe o valor do aluguel no Bloco 08 antes de gerar o contrato.")
+    else:
+        if st.button("📄  GERAR CONTRATO DE LOCAÇÃO", type="primary", use_container_width=True, key="btn_gerar_contrato"):
+            with st.spinner("⚙️ Gerando contrato..."):
+                dados_loc_r   = st.session_state.get("dados_locador", {})
+                dados_locat_r = st.session_state.get("dados_locatario", {})
+                dados_fiad_r  = st.session_state.get("dados_fiador", {})
+                clausula_r    = st.session_state.get("clausula_loc", "")
+                contrato_bytes = gerar_contrato_pdf(
+                    dados_loc_r, dados_locat_r, dados_fiad_r,
+                    imovel_loc_atual, clausula_r
+                )
+                st.session_state["contrato_gerado"] = contrato_bytes
+
+    if st.session_state.get("contrato_gerado"):
+        st.download_button(
+            "⬇️ Baixar Contrato de Locação (PDF)",
+            data=st.session_state["contrato_gerado"],
+            file_name="Contrato_Locacao.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            key="dl_contrato"
+        )
+        st.success("✅ Contrato gerado! Revise os dados antes de assinar.")
+
     st.divider()
     st.markdown("""
     <div class='card-section-neutral'>
