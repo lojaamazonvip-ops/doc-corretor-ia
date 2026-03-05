@@ -2294,13 +2294,13 @@ elif tipo_atendimento == "locacao":
     </div>
     """, unsafe_allow_html=True)
     selecionados_loc = []
-    for nome, conteudo in pdfs_loc:
+    for idx, (nome, conteudo) in enumerate(pdfs_loc):
         col1, col2 = st.columns([0.7, 0.3])
         with col1:
-            marcado = st.checkbox(f"📎 {nome}", value=True, key=f"cb_loc_{nome}")
+            marcado = st.checkbox(f"📎 {nome}", value=True, key=f"cb_loc_{idx}_{nome[:30]}")
         with col2:
             st.download_button("⬇️ Baixar", data=conteudo, file_name=nome,
-                               mime="application/pdf", key=f"dl_loc_{nome}")
+                               mime="application/pdf", key=f"dl_loc_{idx}_{nome[:30]}")
         if marcado: selecionados_loc.append((nome, conteudo))
     if selecionados_loc:
         zip_buf = io.BytesIO()
