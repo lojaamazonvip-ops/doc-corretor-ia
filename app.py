@@ -1788,11 +1788,37 @@ st.markdown(f"""
 
 
 
-# Botão trocar tipo
-if st.button("↩ Trocar tipo de atendimento", key="trocar_tipo"):
-    for key in ["tipo_atendimento","pdfs_gerados","email_gerado","processado","dados"]:
-        st.session_state.pop(key, None)
-    st.rerun()
+# Barra de ações — topo da página principal
+col_troca, col_sair = st.columns([3, 1])
+with col_troca:
+    if st.button("↩ Trocar tipo de atendimento", key="trocar_tipo", use_container_width=True):
+        for key in ["tipo_atendimento","pdfs_gerados","email_gerado","processado","dados"]:
+            st.session_state.pop(key, None)
+        st.rerun()
+with col_sair:
+    if st.button("🚪 Sair", key="sair_topo", use_container_width=True):
+        for k in ["autenticado","cliente","cfg_destino","cfg_remetente","cfg_senha",
+                  "pdfs_gerados","email_gerado","processado","dados",
+                  "pdfs_gerados_loc","email_gerado_loc","processado_loc","dados_loc","tipo_atendimento"]:
+            st.session_state.pop(k, None)
+        st.query_params.clear()
+        st.rerun()
+
+# ── Painel de configuração de email ──
+with st.expander("📤 Configurar envio de email (Gmail)", expanded=False):
+    st.caption("Configure uma vez e envie ao correspondente/imobiliária com 1 clique.")
+    col_e1, col_e2 = st.columns(2)
+    with col_e1:
+        cfg_destino_p   = st.text_input("📧 Email destino",  value=st.session_state.get("cfg_destino",""),   placeholder="destinatario@email.com", key="cfg_destino_pag")
+        cfg_remetente_p = st.text_input("📤 Seu Gmail",      value=st.session_state.get("cfg_remetente",""), placeholder="seuemail@gmail.com",      key="cfg_remetente_pag")
+    with col_e2:
+        cfg_senha_p     = st.text_input("🔑 Senha de app Gmail", value=st.session_state.get("cfg_senha",""), type="password", placeholder="Senha de app (não sua senha normal)", key="cfg_senha_pag")
+        st.caption("💡 Gere em: myaccount.google.com → Segurança → Senhas de app")
+    if st.button("💾 Salvar configuração de email", use_container_width=True, key="salvar_cfg_pag"):
+        st.session_state["cfg_destino"]   = cfg_destino_p
+        st.session_state["cfg_remetente"] = cfg_remetente_p
+        st.session_state["cfg_senha"]     = cfg_senha_p
+        st.success("✅ Configuração salva!")
 
 st.divider()
 
