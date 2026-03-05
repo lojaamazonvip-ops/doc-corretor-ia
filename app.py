@@ -962,22 +962,30 @@ def gerar_contrato_pdf(dados_locador, dados_locatario, dados_fiador, imovel, cla
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
+    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
     import io as _io
 
     buf = _io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=3*cm, rightMargin=3*cm,
                             topMargin=2.5*cm, bottomMargin=2.5*cm)
-    styles = getSampleStyleSheet()
-    title_s  = ParagraphStyle("T",  parent=styles["Heading1"], fontSize=13, alignment=1, spaceAfter=4)
-    sub_s    = ParagraphStyle("S",  parent=styles["Normal"],   fontSize=10, alignment=1, textColor=colors.HexColor("#5C6B7A"), spaceAfter=10)
-    h2_s     = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=11, spaceBefore=14, spaceAfter=4)
-    body_s   = ParagraphStyle("B",  parent=styles["Normal"],   fontSize=10, leading=16, spaceAfter=6)
-    note_s   = ParagraphStyle("N",  parent=styles["Normal"],   fontSize=8,  textColor=colors.HexColor("#888888"), spaceAfter=4, leading=11)
-    bold_s   = ParagraphStyle("Bo", parent=styles["Normal"],   fontSize=10, fontName="Helvetica-Bold", spaceAfter=4)
-    center_s = ParagraphStyle("C",  parent=styles["Normal"],   fontSize=10, alignment=1, spaceAfter=4)
 
-    data_hoje  = datetime.now(timezone(timedelta(hours=-3))).strftime("%d/%m/%Y")
+    styles = getSampleStyleSheet()
+    titulo_s  = ParagraphStyle("TT", fontName="Helvetica-Bold",   fontSize=13, alignment=TA_CENTER, spaceAfter=4,  leading=18)
+    sub_s     = ParagraphStyle("SS", fontName="Helvetica",        fontSize=10, alignment=TA_CENTER, spaceAfter=14, textColor=colors.HexColor("#444444"))
+    h2_s      = ParagraphStyle("H2", fontName="Helvetica-Bold",   fontSize=10, spaceBefore=12, spaceAfter=4, textColor=colors.HexColor("#1A3A6B"))
+    body_s    = ParagraphStyle("BB", fontName="Helvetica",        fontSize=9.5, leading=15, spaceAfter=5, alignment=TA_JUSTIFY)
+    note_s    = ParagraphStyle("NN", fontName="Helvetica-Oblique",fontSize=8,  textColor=colors.HexColor("#888888"), spaceAfter=4, leading=11)
+    center_s  = ParagraphStyle("CC", fontName="Helvetica",        fontSize=9.5, alignment=TA_CENTER, spaceAfter=4)
+
+    def hr(cor="#1A3A6B", esp=8):
+        return HRFlowable(width="100%", thickness=1 if cor=="#1A3A6B" else 0.4,
+                          color=colors.HexColor(cor), spaceAfter=esp, spaceBefore=4)
+    def sp(h=0.3): return Spacer(1, h*cm)
+    def p(txt, st=body_s): return Paragraph(txt, st)
+
+    # ── Dados extraídos ──
+    data_hoje   = datetime.now(timezone(timedelta(hours=-3))).strftime("%d/%m/%Y")
     data_inicio = imovel.get("data_inicio", data_hoje)
     duracao     = imovel.get("duracao_contrato","12 meses")
     finalidade  = imovel.get("finalidade","")
@@ -988,176 +996,340 @@ def gerar_contrato_pdf(dados_locador, dados_locatario, dados_fiador, imovel, cla
     dia_venc    = imovel.get("dia_vencimento", 5)
     forma_pag   = imovel.get("forma_pagamento","")
     pix         = imovel.get("pix_dados", {})
+    quartos     = imovel.get("quartos","")
+    suites      = imovel.get("suites","")
+    banheiros   = imovel.get("banheiros","")
+    vagas       = imovel.get("vagas","")
+    cidade_imovel = imovel.get("cidade","")
 
-    # Formata valor
     try:    valor_fmt = f"R$ {float(valor):,.2f}".replace(",","X").replace(".",",").replace("X",".")
     except: valor_fmt = str(valor)
 
-    nome_loc  = dados_locador.get("nome_completo","_________________________")
-    cpf_loc   = dados_locador.get("cpf","___.___.___-__")
-    eciv_loc  = dados_locador.get("estado_civil","")
-    end_loc   = dados_locador.get("endereco","")
+    nome_loc   = dados_locador.get("nome_completo","_________________________")
+    cpf_loc    = dados_locador.get("cpf","___.___.___-__")
+    rg_loc     = dados_locador.get("rg","")
+    orgao_loc  = dados_locador.get("orgao_expedidor","")
+    eciv_loc   = dados_locador.get("estado_civil","")
+    prof_loc   = dados_locador.get("profissao","")
+    end_loc    = dados_locador.get("endereco","")
+    tel_loc    = dados_locador.get("telefone","")
+    email_loc  = dados_locador.get("email","")
 
     nome_locat  = dados_locatario.get("nome_completo","_________________________")
     cpf_locat   = dados_locatario.get("cpf","___.___.___-__")
+    rg_locat    = dados_locatario.get("rg","")
+    orgao_locat = dados_locatario.get("orgao_expedidor","")
     eciv_locat  = dados_locatario.get("estado_civil","")
     prof_locat  = dados_locatario.get("profissao","")
+    end_locat   = dados_locatario.get("endereco","")
+    tel_locat   = dados_locatario.get("telefone","")
+    email_locat = dados_locatario.get("email","")
 
-    nome_fiad = dados_fiador.get("nome_completo","") if dados_fiador else ""
-    cpf_fiad  = dados_fiador.get("cpf","") if dados_fiador else ""
+    nome_fiad  = dados_fiador.get("nome_completo","") if dados_fiador else ""
+    cpf_fiad   = dados_fiador.get("cpf","")           if dados_fiador else ""
+    rg_fiad    = dados_fiador.get("rg","")             if dados_fiador else ""
+    orgao_fiad = dados_fiador.get("orgao_expedidor","")if dados_fiador else ""
+    eciv_fiad  = dados_fiador.get("estado_civil","")   if dados_fiador else ""
+    prof_fiad  = dados_fiador.get("profissao","")      if dados_fiador else ""
+    end_fiad   = dados_fiador.get("endereco","")       if dados_fiador else ""
+    tel_fiad   = dados_fiador.get("telefone","")       if dados_fiador else ""
+
+    # Helper: formata linha de qualificação
+    def qualif(nome, cpf, rg, orgao, eciv, prof, end, tel, email, papel):
+        rg_txt = f"{rg}{f' – {orgao}' if orgao else ''}" if rg else ""
+        partes = [nome, "brasileiro(a)"]
+        if eciv:  partes.append(eciv.lower())
+        if prof:  partes.append(prof)
+        partes.append(f"inscrito(a) no CPF/MF sob nº <b>{cpf}</b>")
+        if rg_txt: partes.append(f"portador(a) do RG nº {rg_txt}")
+        if end:    partes.append(f"residente em {end}")
+        extras = []
+        if tel:   extras.append(f"Tel: {tel}")
+        if email: extras.append(f"e-mail: {email}")
+        if extras: partes.append(", ".join(extras))
+        return ", ".join(partes) + f", doravante denominado(a) simplesmente <b>{papel}</b>."
+
+    # Composição do imóvel
+    comp_parts = []
+    if quartos:   comp_parts.append(f"{quartos} quarto(s)")
+    if suites:    comp_parts.append(f"{suites} suíte(s)")
+    if banheiros: comp_parts.append(f"{banheiros} banheiro(s)")
+    if vagas:     comp_parts.append(f"{vagas} vaga(s) de garagem")
+    comp_str = ", ".join(comp_parts)
+
+    # Cláusula de prazo
+    if duracao == "Indeterminado":
+        prazo_txt = (f"A presente locação é por prazo <b>indeterminado</b>, com início em <b>{data_inicio}</b>, "
+                     f"podendo ser rescindida por qualquer das partes mediante aviso prévio de 30 (trinta) dias, "
+                     f"nos termos do Art. 6º da Lei nº 8.245/91.")
+        prazo_42 = ("A qualquer tempo, qualquer das partes poderá notificar a outra com 30 dias de antecedência "
+                    "para encerramento da locação.")
+    else:
+        prazo_txt = (f"A presente locação é por prazo determinado de <b>{duracao}</b>, com início em "
+                     f"<b>{data_inicio}</b>. O LOCATÁRIO se obriga a restituir o imóvel ao LOCADOR na "
+                     f"data de término, livre e desocupado, independentemente de notificação.")
+        prazo_42 = ("Findo o prazo, se o LOCATÁRIO permanecer no imóvel por mais de 30 dias sem oposição "
+                    "do LOCADOR, a locação prorrogar-se-á por prazo indeterminado, nas mesmas condições, "
+                    "nos termos do Art. 47 da Lei nº 8.245/91.")
+
+    num_fianca = "11ª" if nome_fiad else ""
+    num_foro   = "12ª" if nome_fiad else "11ª"
 
     story = []
 
-    # Cabeçalho
-    story.append(Paragraph("CONTRATO DE LOCAÇÃO DE IMÓVEL", title_s))
-    tipo_txt = f"{finalidade} — {tipo_imovel}" if finalidade else tipo_imovel
-    story.append(Paragraph(f"{tipo_txt}{f' | Área: {area}m²' if area else ''}", sub_s))
-    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1565C0"), spaceAfter=10))
+    # ── CABEÇALHO ──
+    story += [
+        p("CONTRATO PARTICULAR DE LOCAÇÃO DE IMÓVEL", titulo_s),
+        p(f"{finalidade + ' — ' if finalidade else ''}{tipo_imovel}{f' | Área: {area}m²' if area else ''}", sub_s),
+        hr(), sp(0.2),
+    ]
 
-    # Qualificação — Locador
-    story.append(Paragraph("CLÁUSULA 1ª — DAS PARTES", h2_s))
-    story.append(Paragraph("<b>LOCADOR:</b>", bold_s))
-    loc_info = f"{nome_loc}, CPF nº {cpf_loc}"
-    if eciv_loc: loc_info += f", {eciv_loc}"
-    if end_loc:  loc_info += f", residente em {end_loc}"
-    story.append(Paragraph(loc_info + ", doravante denominado simplesmente LOCADOR.", body_s))
+    # ── PREÂMBULO ──
+    story += [
+        p("PREÂMBULO", h2_s),
+        p("Pelo presente instrumento particular de <b>Contrato de Locação de Imóvel</b>, as partes "
+          "a seguir qualificadas têm entre si, justo e contratado, a locação do imóvel descrito na "
+          "Cláusula Segunda, com fundamento na Lei nº 8.245/91 (Lei do Inquilinato), no Código Civil "
+          "Brasileiro (Lei nº 10.406/2002) e demais normas aplicáveis, obrigando-se ao fiel cumprimento "
+          "das condições aqui estabelecidas:"),
+        hr("#cccccc", 4),
+    ]
 
-    story.append(Paragraph("<b>LOCATÁRIO:</b>", bold_s))
-    locat_info = f"{nome_locat}, CPF nº {cpf_locat}"
-    if eciv_locat: locat_info += f", {eciv_locat}"
-    if prof_locat: locat_info += f", {prof_locat}"
-    story.append(Paragraph(locat_info + ", doravante denominado simplesmente LOCATÁRIO.", body_s))
-
+    # ── CLÁUSULA 1 — PARTES ──
+    story += [p("CLÁUSULA 1ª — DA QUALIFICAÇÃO DAS PARTES", h2_s)]
+    story += [p(f"<b>1.1 – LOCADOR:</b> {qualif(nome_loc,cpf_loc,rg_loc,orgao_loc,eciv_loc,prof_loc,end_loc,tel_loc,email_loc,'LOCADOR')}"), sp(0.15)]
+    story += [p(f"<b>1.2 – LOCATÁRIO:</b> {qualif(nome_locat,cpf_locat,rg_locat,orgao_locat,eciv_locat,prof_locat,end_locat,tel_locat,email_locat,'LOCATÁRIO')}"), sp(0.15)]
     if nome_fiad:
-        story.append(Paragraph("<b>FIADOR:</b>", bold_s))
-        fiad_info = f"{nome_fiad}, CPF nº {cpf_fiad}" if cpf_fiad else nome_fiad
-        story.append(Paragraph(fiad_info + ", doravante denominado simplesmente FIADOR.", body_s))
+        story += [p(f"<b>1.3 – FIADOR:</b> {qualif(nome_fiad,cpf_fiad,rg_fiad,orgao_fiad,eciv_fiad,prof_fiad,end_fiad,tel_fiad,'','FIADOR')}"), sp(0.15)]
+    story += [hr("#cccccc", 4)]
 
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#DDDDDD"), spaceAfter=6))
+    # ── CLÁUSULA 2 — OBJETO ──
+    story += [
+        p("CLÁUSULA 2ª — DO OBJETO E DESCRIÇÃO DO IMÓVEL", h2_s),
+        p(f"<b>2.1</b> – O presente contrato tem por objeto a locação de imóvel do tipo <b>{tipo_imovel}</b>"
+          f"{f', com área total de <b>{area}m²</b>' if area else ''}"
+          f"{f', composto por {comp_str}' if comp_str else ''}"
+          f", destinado para fins <b>{finalidade.lower() if finalidade else 'de locação'}</b>, "
+          f"nos termos do Art. 1º da Lei nº 8.245/91."),
+    ]
+    if matricula:
+        story += [p(f"<b>2.2</b> – O imóvel está matriculado sob nº <b>{matricula}</b> no Cartório de Registro de Imóveis competente.")]
+    story += [
+        p("<b>2.3</b> – O imóvel é entregue ao LOCATÁRIO conforme descrito no <b>Termo de Vistoria Inicial</b> "
+          "que integra o presente contrato como Anexo I, devidamente assinado pelas partes."),
+        p("<b>2.4</b> – Qualquer benfeitoria somente poderá ser realizada com autorização prévia e escrita "
+          "do LOCADOR. Benfeitorias necessárias poderão ser feitas sem autorização, mas não gerarão direito "
+          "à indenização ou retenção, salvo acordo expresso."),
+        hr("#cccccc", 4),
+    ]
 
-    # Objeto
-    story.append(Paragraph("CLÁUSULA 2ª — DO OBJETO", h2_s))
-    mat_txt  = f", matriculado sob nº {matricula} no Cartório de Registro de Imóveis competente," if matricula else ""
-    area_txt = f" com área de {area}m²" if area else ""
-    story.append(Paragraph(
-        f"O presente contrato tem por objeto a locação do imóvel{mat_txt} do tipo {tipo_imovel}{area_txt}, "
-        f"destinado para fins {finalidade.lower() if finalidade else 'de locação'}, "
-        f"nos termos da Lei nº 8.245/91.", body_s))
+    # ── CLÁUSULA 3 — DESTINAÇÃO ──
+    dest_txt = clausula_dest.replace("CLÁUSULA DE DESTINAÇÃO DO IMÓVEL\n","").strip() if clausula_dest else (
+        f"O imóvel ora locado destina-se exclusivamente ao uso {finalidade.lower() if finalidade else 'conforme acordado'}, "
+        f"sendo expressamente vedado o exercício de qualquer atividade não autorizada.")
+    story += [
+        p("CLÁUSULA 3ª — DA DESTINAÇÃO E USO DO IMÓVEL", h2_s),
+        p(f"<b>3.1</b> – {dest_txt}"),
+        p("<b>3.2</b> – É vedada a sublocação total ou parcial, bem como o empréstimo ou cessão gratuita "
+          "a terceiros, sem prévia e expressa autorização escrita do LOCADOR, sob pena de rescisão imediata, "
+          "nos termos do Art. 13 da Lei nº 8.245/91."),
+        p("<b>3.3</b> – O LOCATÁRIO obriga-se a usar o imóvel de forma adequada, conservando-o em perfeitas "
+          "condições de higiene, limpeza e habitabilidade."),
+        hr("#cccccc", 4),
+    ]
 
-    # Destinação
-    story.append(Paragraph("CLÁUSULA 3ª — DA DESTINAÇÃO", h2_s))
-    story.append(Paragraph(clausula_dest.replace("CLÁUSULA DE DESTINAÇÃO DO IMÓVEL\n",""), body_s))
+    # ── CLÁUSULA 4 — PRAZO ──
+    story += [
+        p("CLÁUSULA 4ª — DO PRAZO", h2_s),
+        p(f"<b>4.1</b> – {prazo_txt}"),
+        p(f"<b>4.2</b> – {prazo_42}"),
+        p("<b>4.3</b> – Durante os primeiros <b>12 (doze) meses</b>, o LOCADOR não poderá reaver o imóvel, "
+          "salvo nas hipóteses previstas no Art. 9º da Lei nº 8.245/91."),
+        hr("#cccccc", 4),
+    ]
 
-    # Prazo
-    story.append(Paragraph("CLÁUSULA 4ª — DO PRAZO", h2_s))
-    if duracao == "Indeterminado":
-        story.append(Paragraph(
-            f"A presente locação é por prazo indeterminado, com início em {data_inicio}, "
-            f"podendo ser rescindida por qualquer das partes mediante aviso prévio de 30 (trinta) dias, "
-            f"nos termos do Art. 6º da Lei nº 8.245/91.", body_s))
-    else:
-        meses = duracao.replace(" meses","")
-        story.append(Paragraph(
-            f"A presente locação é por prazo determinado de {duracao}, com início em {data_inicio}, "
-            f"renovando-se automaticamente por igual período caso não haja manifestação contrária "
-            f"de qualquer das partes com 30 (trinta) dias de antecedência.", body_s))
-
-    # Valor e pagamento
-    story.append(Paragraph("CLÁUSULA 5ª — DO ALUGUEL E FORMA DE PAGAMENTO", h2_s))
-    story.append(Paragraph(
-        f"O aluguel mensal é de <b>{valor_fmt}</b>, a ser pago até o dia <b>{dia_venc}</b> de cada mês, "
-        f"através de <b>{forma_pag}</b>.", body_s))
-
+    # ── CLÁUSULA 5 — ALUGUEL ──
+    story += [
+        p("CLÁUSULA 5ª — DO VALOR DO ALUGUEL E FORMA DE PAGAMENTO", h2_s),
+        p(f"<b>5.1</b> – O aluguel mensal é fixado no valor de <b>{valor_fmt}</b>, a ser pago "
+          f"impreterivelmente até o dia <b>{dia_venc}</b> de cada mês, através de <b>{forma_pag}</b>."),
+        p("<b>5.2</b> – O não pagamento na data estabelecida sujeitará o LOCATÁRIO ao pagamento de: "
+          "(a) multa moratória de 10% sobre o valor em atraso; "
+          "(b) juros de mora de 1% ao mês pro rata die; "
+          "(c) correção monetária pelo IGP-M/FGV do período."),
+        p("<b>5.3</b> – O LOCATÁRIO não poderá descontar do aluguel valores despendidos com reparos, "
+          "salvo autorização prévia e escrita do LOCADOR."),
+    ]
     if forma_pag == "PIX" and pix:
-        chave   = pix.get("chave","")
-        favore  = pix.get("favorecido","")
-        banco   = pix.get("banco","")
-        tipo_k  = pix.get("tipo","")
+        chave  = pix.get("chave",""); favor = pix.get("favorecido","")
+        banco  = pix.get("banco",""); tipo_k = pix.get("tipo","")
         pix_linhas = []
-        if favore: pix_linhas.append(["Favorecido:", favore])
-        if chave:  pix_linhas.append([f"Chave PIX ({tipo_k}):", chave])
-        if banco:  pix_linhas.append(["Banco:", banco])
+        if favor: pix_linhas.append(["Favorecido:", favor])
+        if chave: pix_linhas.append([f"Chave PIX ({tipo_k}):", chave])
+        if banco: pix_linhas.append(["Banco:", banco])
         if pix_linhas:
-            story.append(Paragraph("Dados para pagamento via PIX:", bold_s))
+            story.append(p("<b>Dados para pagamento via PIX:</b>"))
             t = Table(pix_linhas, colWidths=[4.5*cm, 11*cm])
-            t.setStyle(TableStyle([
-                ("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
-                ("FONTNAME",(1,0),(1,-1),"Helvetica"),
-                ("FONTSIZE",(0,0),(-1,-1),10),
-                ("BOTTOMPADDING",(0,0),(-1,-1),4),
-                ("TOPPADDING",(0,0),(-1,-1),4),
-            ]))
+            t.setStyle(TableStyle([("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),9),
+                                   ("BOTTOMPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3)]))
             story.append(t)
-            story.append(Spacer(1,0.2*cm))
+    story += [hr("#cccccc", 4)]
 
-    # Reajuste
-    story.append(Paragraph("CLÁUSULA 6ª — DO REAJUSTE", h2_s))
-    story.append(Paragraph(
-        "O valor do aluguel será reajustado anualmente pelo índice IGP-M/FGV acumulado nos últimos 12 (doze) meses, "
-        "ou por outro índice legal que vier a substituí-lo.", body_s))
+    # ── CLÁUSULA 6 — REAJUSTE ──
+    story += [
+        p("CLÁUSULA 6ª — DO REAJUSTE DO ALUGUEL", h2_s),
+        p("<b>6.1</b> – O valor do aluguel será reajustado anualmente pelo índice <b>IGP-M/FGV</b> "
+          "acumulado nos últimos 12 meses, ou por outro índice oficial que vier a substituí-lo por lei."),
+        p("<b>6.2</b> – Na hipótese de extinção ou suspensão do índice, as partes adotarão o IPCA/IBGE "
+          "como substituto, ou outro índice que melhor reflita a variação inflacionária do período."),
+        hr("#cccccc", 4),
+    ]
 
-    # Encargos
-    story.append(Paragraph("CLÁUSULA 7ª — DOS ENCARGOS", h2_s))
-    story.append(Paragraph(
-        "São de responsabilidade do LOCATÁRIO: o pagamento das contas de água, energia elétrica, gás, "
-        "telefone, internet e demais serviços utilizados no imóvel, bem como o IPTU e taxas condominiais, "
-        "salvo convenção em contrário expressa neste instrumento.", body_s))
+    # ── CLÁUSULA 7 — ENCARGOS ──
+    story += [
+        p("CLÁUSULA 7ª — DOS ENCARGOS E DESPESAS ACESSÓRIAS", h2_s),
+        p("<b>7.1</b> – São de responsabilidade <b>exclusiva do LOCATÁRIO</b>, a partir da entrega das chaves: "
+          "(a) água e esgoto; (b) energia elétrica; (c) gás; (d) telefone, internet e TV; "
+          "(e) IPTU e taxas municipais; (f) taxas condominiais ordinárias, se aplicável."),
+        p("<b>7.2</b> – Ficam a cargo do <b>LOCADOR</b>: despesas extraordinárias de condomínio, "
+          "obras estruturais determinadas pelo poder público e seguro de incêndio do imóvel."),
+        p("<b>7.3</b> – Na entrega das chaves, o LOCATÁRIO deverá apresentar comprovantes de quitação "
+          "de todas as contas de sua responsabilidade."),
+        hr("#cccccc", 4),
+    ]
 
-    # Rescisão
-    story.append(Paragraph("CLÁUSULA 8ª — DA RESCISÃO", h2_s))
-    story.append(Paragraph(
-        "O descumprimento de qualquer cláusula deste contrato faculta à parte inocente rescindi-lo de pleno direito, "
-        "exigindo as perdas e danos cabíveis. Em caso de rescisão antecipada pelo LOCATÁRIO, "
-        "será devida multa proporcional ao tempo restante do contrato, nos termos do Art. 4º da Lei nº 8.245/91.", body_s))
+    # ── CLÁUSULA 8 — CONSERVAÇÃO ──
+    story += [
+        p("CLÁUSULA 8ª — DA CONSERVAÇÃO E REPAROS DO IMÓVEL", h2_s),
+        p("<b>8.1</b> – O LOCATÁRIO recebe o imóvel em perfeitas condições, comprometendo-se a devolvê-lo "
+          "nas mesmas condições, ressalvado o desgaste natural pelo uso."),
+        p("<b>8.2</b> – São de responsabilidade do LOCATÁRIO os reparos decorrentes de uso inadequado, "
+          "negligência, danos causados por si ou por terceiros, manutenção de torneiras, registros, "
+          "fechaduras, vidros e desentupimento de ralos e pias."),
+        p("<b>8.3</b> – São de responsabilidade do LOCADOR: telhado, laje, fundações, paredes estruturais "
+          "e instalações embutidas (tubulações, fiação), além de vícios ocultos preexistentes."),
+        hr("#cccccc", 4),
+    ]
 
-    # Fiança (se houver)
+    # ── CLÁUSULA 9 — VISTORIA ──
+    story += [
+        p("CLÁUSULA 9ª — DA VISTORIA E DEVOLUÇÃO DO IMÓVEL", h2_s),
+        p("<b>9.1</b> – Na entrega das chaves será realizada <b>vistoria de saída</b>, comparando-se "
+          "o estado do imóvel ao registrado no Termo de Vistoria Inicial. Constatada divergência, "
+          "o LOCATÁRIO arcará com os custos de reparação."),
+        p("<b>9.2</b> – O LOCATÁRIO deverá devolver o imóvel: completamente desocupado; limpo e higienizado; "
+          "com todas as chaves e acessos; com as contas quitadas até a data de entrega."),
+        p("<b>9.3</b> – O LOCADOR terá até <b>30 dias</b> após a vistoria para apresentar cobranças por "
+          "danos ao imóvel, após o que decairá esse direito."),
+        hr("#cccccc", 4),
+    ]
+
+    # ── CLÁUSULA 10 — RESCISÃO ──
+    story += [
+        p("CLÁUSULA 10ª — DA RESCISÃO CONTRATUAL", h2_s),
+        p("<b>10.1</b> – O descumprimento de qualquer obrigação faculta à parte inocente rescindir "
+          "o contrato de pleno direito, sem prejuízo do direito a perdas e danos."),
+        p("<b>10.2 – Rescisão antecipada pelo LOCATÁRIO:</b> Implicará pagamento de multa compensatória "
+          "de <b>3 (três) aluguéis</b>, calculada proporcionalmente ao tempo restante, nos termos do "
+          "Art. 4º da Lei nº 8.245/91, com aviso prévio mínimo de <b>30 dias</b>."),
+        p("<b>10.3 – Rescisão por infração:</b> O LOCADOR poderá rescindir imediatamente, sem indenização, "
+          "em caso de: inadimplência superior a 30 dias; sublocação não autorizada; uso do imóvel para "
+          "fins ilícitos; obras não autorizadas; ou descumprimento de qualquer cláusula."),
+        hr("#cccccc", 4),
+    ]
+
+    # ── CLÁUSULA 11 — FIANÇA (condicional) ──
+    clausula_foro_num = num_foro
     if nome_fiad:
-        story.append(Paragraph("CLÁUSULA 9ª — DA FIANÇA", h2_s))
-        story.append(Paragraph(
-            f"O FIADOR, {nome_fiad}{f', CPF nº {cpf_fiad}' if cpf_fiad else ''}, "
-            "obriga-se como garantidor solidário de todas as obrigações assumidas pelo LOCATÁRIO neste contrato, "
-            "incluindo aluguéis, encargos, multas e danos ao imóvel, renunciando ao benefício de ordem "
-            "previsto no Art. 827 do Código Civil.", body_s))
+        story += [
+            p(f"CLÁUSULA {num_fianca} — DA GARANTIA LOCATÍCIA — FIANÇA", h2_s),
+            p(f"<b>11.1</b> – Em garantia do fiel cumprimento de todas as obrigações assumidas pelo LOCATÁRIO, "
+              f"o FIADOR <b>{nome_fiad}</b>, CPF nº <b>{cpf_fiad}</b>, obriga-se como <b>garante e principal "
+              f"pagador, solidariamente responsável</b>, renunciando expressamente aos benefícios de ordem "
+              f"previstos nos Arts. 827 e 828 do Código Civil."),
+            p("<b>11.2</b> – A fiança abrange todo o período da locação, incluindo eventual prorrogação e o "
+              "período entre a notificação de desocupação e a efetiva entrega das chaves, nos termos do "
+              "Art. 39 da Lei nº 8.245/91."),
+            p("<b>11.3</b> – O LOCADOR poderá exigir novo FIADOR nas hipóteses do Art. 40 da Lei nº 8.245/91. "
+              "O LOCATÁRIO terá 30 dias para apresentar substituto idôneo."),
+            hr("#cccccc", 4),
+        ]
 
-    # Foro
-    story.append(Paragraph(f"CLÁUSULA {'10ª' if nome_fiad else '9ª'} — DO FORO", h2_s))
-    story.append(Paragraph(
-        "As partes elegem o foro da comarca do imóvel locado para dirimir quaisquer dúvidas ou litígios "
-        "oriundos deste contrato, renunciando a qualquer outro, por mais privilegiado que seja.", body_s))
+    # ── CLÁUSULA FORO ──
+    story += [
+        p(f"CLÁUSULA {clausula_foro_num} — DO FORO", h2_s),
+        p(f"<b>As partes elegem o Foro da Comarca do imóvel locado</b>"
+          f"{f', {cidade_imovel}' if cidade_imovel else ''}"
+          f" como competente para dirimir quaisquer dúvidas ou litígios oriundos deste contrato, "
+          f"renunciando expressamente a qualquer outro, por mais privilegiado que seja, "
+          f"nos termos do Art. 63 do Código de Processo Civil."),
+        hr(), sp(0.3),
+    ]
 
-    story.append(Spacer(1, 0.3*cm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#DDDDDD"), spaceAfter=8))
-    story.append(Paragraph(
-        f"E por estarem assim justos e contratados, firmam o presente instrumento em 2 (duas) vias de igual teor, "
-        f"na cidade, aos {data_hoje}.", body_s))
-    story.append(Paragraph(
-        "Nota: Este documento foi gerado com base nas informações fornecidas pelas partes. "
-        "Recomenda-se revisão por assessoria jurídica antes da assinatura.", note_s))
+    # ── FECHO ──
+    story += [
+        p(f"E por estarem assim justos e acordados, firmam o presente instrumento particular em "
+          f"<b>2 (duas) vias</b> de igual teor e forma, na presença de 2 (duas) testemunhas, "
+          f"constituindo título executivo extrajudicial (Art. 784, VIII, CPC), na cidade, "
+          f"aos {data_hoje}.", center_s),
+        p("Nota: Documento gerado pela plataforma ImobFlow. Recomenda-se revisão por assessoria jurídica antes da assinatura.", note_s),
+        sp(1.5),
+    ]
 
-    story.append(Spacer(1, 1.5*cm))
+    # ── ASSINATURAS ──
     assin = [
         ["_______________________________", "    ", "_______________________________"],
         [nome_loc or "LOCADOR",             "    ", nome_locat or "LOCATÁRIO"],
         [f"CPF: {cpf_loc}",                 "    ", f"CPF: {cpf_locat}"],
+        ["LOCADOR",                         "    ", "LOCATÁRIO"],
     ]
-    if nome_fiad:
-        assin += [
-            ["", "", ""],
-            ["_______________________________", "", ""],
-            [nome_fiad, "", ""],
-            [f"CPF: {cpf_fiad}" if cpf_fiad else "FIADOR", "", ""],
-        ]
     ta = Table(assin, colWidths=[7.5*cm, 1*cm, 7.5*cm])
     ta.setStyle(TableStyle([
         ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
-        ("FONTNAME",(0,1),(0,1),"Helvetica-Bold"),
-        ("FONTNAME",(2,1),(2,1),"Helvetica-Bold"),
+        ("FONTNAME",(0,1),(0,3),"Helvetica-Bold"),
+        ("FONTNAME",(2,1),(2,3),"Helvetica-Bold"),
         ("FONTSIZE",(0,0),(-1,-1),9),
         ("ALIGN",(0,0),(-1,-1),"CENTER"),
         ("BOTTOMPADDING",(0,0),(-1,-1),3),
         ("TOPPADDING",(0,0),(-1,-1),3),
     ]))
     story.append(ta)
+
+    if nome_fiad:
+        story.append(sp(1.2))
+        ta2 = Table([
+            ["_______________________________"],
+            [nome_fiad],
+            [f"CPF: {cpf_fiad}" if cpf_fiad else "FIADOR"],
+            ["FIADOR"],
+        ], colWidths=[7.5*cm])
+        ta2.setStyle(TableStyle([
+            ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
+            ("FONTNAME",(0,1),(0,3),"Helvetica-Bold"),
+            ("FONTSIZE",(0,0),(-1,-1),9),
+            ("ALIGN",(0,0),(-1,-1),"CENTER"),
+            ("BOTTOMPADDING",(0,0),(-1,-1),3),
+            ("TOPPADDING",(0,0),(-1,-1),3),
+        ]))
+        story.append(ta2)
+
+    story.append(sp(1.5))
+    story.append(hr("#cccccc"))
+    story.append(p("TESTEMUNHAS:", h2_s))
+    story.append(sp(0.5))
+    tt = Table([
+        ["_______________________________", "    ", "_______________________________"],
+        ["Nome:",                           "    ", "Nome:"],
+        ["CPF:",                            "    ", "CPF:"],
+    ], colWidths=[7.5*cm, 1*cm, 7.5*cm])
+    tt.setStyle(TableStyle([
+        ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
+        ("FONTSIZE",(0,0),(-1,-1),9),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),
+        ("BOTTOMPADDING",(0,0),(-1,-1),4),
+        ("TOPPADDING",(0,0),(-1,-1),4),
+    ]))
+    story.append(tt)
 
     doc.build(story)
     buf.seek(0)
