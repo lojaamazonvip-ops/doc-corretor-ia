@@ -463,7 +463,13 @@ RETORNE JSON: {{"grupos":[{{"pdf_final":"Nome","arquivos":["arq.pdf"],"observaca
         parts = []
         for nome, conteudo in imgs:
             b64 = base64.b64encode(conteudo).decode('utf-8')
-            parts += [{"inline_data":{"mime_type":"image/jpeg","data":b64}},
+            n = nome.lower()
+            if n.endswith('.png'):   img_mime = "image/png"
+            elif n.endswith('.webp'): img_mime = "image/webp"
+            elif n.endswith('.bmp'):  img_mime = "image/bmp"
+            elif n.endswith(('.tiff','.tif')): img_mime = "image/tiff"
+            else: img_mime = "image/jpeg"
+            parts += [{"inline_data":{"mime_type":img_mime,"data":b64}},
                       {"text":f"ID_ARQUIVO: {nome}"}]
         prompt_img = f"""
 Especialista em documentos imobiliários. MÁXIMA PRECISÃO.
@@ -987,6 +993,7 @@ RETORNE APENAS JSON válido (sem markdown, sem explicações):
 {cfg['campos_json']}
 """
     parts = [{"text": prompt}]
+    debug_info = []
     for nome, conteudo, tipo in arquivos_bytes:
         b64  = base64.b64encode(conteudo).decode('utf-8')
         nome_lower = nome.lower()
@@ -1003,14 +1010,14 @@ RETORNE APENAS JSON válido (sem markdown, sem explicações):
         elif nome_lower.endswith('.tiff') or nome_lower.endswith('.tif'):
             mime = "image/tiff"
         else:
-            mime = "image/jpeg"  # jpg, jpeg, default
+            mime = "image/jpeg"
+        debug_info.append(f"{nome} | mime={mime} | bytes={len(conteudo)} | b64_len={len(b64)}")
         parts += [{"text": f"DOCUMENTO {polo.upper()}: {nome}"},
                   {"inline_data": {"mime_type": mime, "data": b64}}]
     try:
         resp = chamar_gemini(parts)
-        # Debug — salva resposta bruta para diagnóstico
         import streamlit as _st
-        _st.session_state[f"debug_resp_{polo}"] = resp[:500]
+        _st.session_state[f"debug_resp_{polo}"] = "\n".join(debug_info) + "\n\n--- RESPOSTA IA ---\n" + resp[:800]
         # Limpeza robusta do JSON
         texto = resp.strip()
         texto = texto.replace('```json','').replace('```','').strip()
@@ -1863,6 +1870,7 @@ elif tipo_atendimento == "locacao":
             return result
 
         barra = st.progress(0, text="📄 Organizando documentos do Locador...")
+        # Lê todos os bytes UMA vez — Streamlit não permite reler após read()
         bytes_locador   = bytes_polo(upload_locador)
         bytes_locatario = bytes_polo(upload_locatario)
         bytes_fiador    = bytes_polo(upload_fiador) if upload_fiador else []
