@@ -544,7 +544,13 @@ RETORNE APENAS JSON:
     parts = [{"text": prompt}]
     for nome, conteudo, tipo in arquivos_bytes:
         b64  = base64.b64encode(conteudo).decode('utf-8')
-        mime = "application/pdf" if tipo=="pdf" else "image/jpeg"
+        n = nome.lower()
+        if n.endswith('.pdf'):       mime = "application/pdf"
+        elif n.endswith('.png'):     mime = "image/png"
+        elif n.endswith('.webp'):    mime = "image/webp"
+        elif n.endswith('.bmp'):     mime = "image/bmp"
+        elif n.endswith(('.tiff','.tif')): mime = "image/tiff"
+        else:                        mime = "image/jpeg"
         parts += [{"text":f"DOCUMENTO: {nome}"},{"inline_data":{"mime_type":mime,"data":b64}}]
     for nome, conteudo in pdfs_gerados:
         b64 = base64.b64encode(conteudo).decode('utf-8')
@@ -983,7 +989,21 @@ RETORNE APENAS JSON válido (sem markdown, sem explicações):
     parts = [{"text": prompt}]
     for nome, conteudo, tipo in arquivos_bytes:
         b64  = base64.b64encode(conteudo).decode('utf-8')
-        mime = "application/pdf" if tipo == "pdf" else "image/jpeg"
+        nome_lower = nome.lower()
+        if nome_lower.endswith('.pdf'):
+            mime = "application/pdf"
+        elif nome_lower.endswith('.png'):
+            mime = "image/png"
+        elif nome_lower.endswith('.webp'):
+            mime = "image/webp"
+        elif nome_lower.endswith('.gif'):
+            mime = "image/gif"
+        elif nome_lower.endswith('.bmp'):
+            mime = "image/bmp"
+        elif nome_lower.endswith('.tiff') or nome_lower.endswith('.tif'):
+            mime = "image/tiff"
+        else:
+            mime = "image/jpeg"  # jpg, jpeg, default
         parts += [{"text": f"DOCUMENTO {polo.upper()}: {nome}"},
                   {"inline_data": {"mime_type": mime, "data": b64}}]
     try:
