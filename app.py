@@ -2117,6 +2117,11 @@ elif tipo_atendimento == "locacao":
           type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
           key="upload_locador",
       )
+      col_loc1, col_loc2 = st.columns(2)
+      with col_loc1:
+          st.text_input("📧 E-mail do Locador", placeholder="locador@email.com", key="email_manual_locador")
+      with col_loc2:
+          st.text_input("📱 Contato (WhatsApp/Tel)", placeholder="(81) 99999-0000", key="tel_manual_locador")
       if upload_locador:
           dados_loc_preview = st.session_state.get("preview_locador", {})
           if dados_loc_preview:
@@ -2144,6 +2149,11 @@ elif tipo_atendimento == "locacao":
           type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
           key="upload_locatario",
       )
+      col_locat1, col_locat2 = st.columns(2)
+      with col_locat1:
+          st.text_input("📧 E-mail do Locatário", placeholder="locatario@email.com", key="email_manual_locatario")
+      with col_locat2:
+          st.text_input("📱 Contato (WhatsApp/Tel)", placeholder="(81) 99999-0000", key="tel_manual_locatario")
       if upload_locatario:
           dados_locat_preview = st.session_state.get("preview_locatario", {})
           if dados_locat_preview:
@@ -2175,6 +2185,11 @@ elif tipo_atendimento == "locacao":
               type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
               key="upload_fiador",
           )
+          col_fiad1, col_fiad2 = st.columns(2)
+          with col_fiad1:
+              st.text_input("📧 E-mail do Fiador", placeholder="fiador@email.com", key="email_manual_fiador")
+          with col_fiad2:
+              st.text_input("📱 Contato (WhatsApp/Tel)", placeholder="(81) 99999-0000", key="tel_manual_fiador")
           if upload_fiador:
               dados_fiador_preview = st.session_state.get("preview_fiador", {})
               if dados_fiador_preview:
@@ -2587,6 +2602,19 @@ elif tipo_atendimento == "locacao":
         dados_locador_ext   = resultados.get("dados_locador",   {})
         dados_locatario_ext = resultados.get("dados_locatario", {})
         dados_fiador_ext    = resultados.get("dados_fiador",    {}) if bytes_fiador else {}
+
+        # Mesclar campos manuais (email e telefone) — têm prioridade sobre os extraídos
+        def _mesclar_manual(dados, key_email, key_tel):
+            email_m = st.session_state.get(key_email, "").strip()
+            tel_m   = st.session_state.get(key_tel,   "").strip()
+            if email_m: dados["email"]    = email_m
+            if tel_m:   dados["telefone"] = tel_m
+            return dados
+
+        dados_locador_ext   = _mesclar_manual(dados_locador_ext,   "email_manual_locador",   "tel_manual_locador")
+        dados_locatario_ext = _mesclar_manual(dados_locatario_ext, "email_manual_locatario", "tel_manual_locatario")
+        if bytes_fiador:
+            dados_fiador_ext = _mesclar_manual(dados_fiador_ext,   "email_manual_fiador",    "tel_manual_fiador")
 
         # Validações pós-extração — avisos, não bloqueios
         avisos_dados = []
