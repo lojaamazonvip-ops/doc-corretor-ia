@@ -2904,13 +2904,15 @@ def quiz_etapa_6():
 
         st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-        # Botão principal — usa a mesma key do sistema atual!
-        st.button(
+        # Botão principal — ao clicar, marca flag e sai do stop para o processamento real
+        if st.button(
             "⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO",
             type="primary",
             use_container_width=True,
-            key="btn_processar_locacao"
-        )
+            key="quiz_btn_processar"
+        ):
+            st.session_state["quiz_iniciar_processamento"] = True
+            st.rerun()
         st.caption("A IA irá processar todos os documentos e gerar o contrato, termo de vistoria e email profissional.")
 
     _quiz_voltar(5)
@@ -2987,14 +2989,79 @@ st.divider()
 # ── Se modo quiz ativo e é locação, executar o assistente ──
 _modo_interface = st.session_state.get("modo_interface", "painel")
 if _modo_interface == "quiz" and tipo_atendimento == "locacao":
-    _etapa_quiz_atual = st.session_state.get("etapa_quiz", 1)
-    # Etapas 1-6: mostrar quiz; etapa 6 precisa do botão processar que está no quiz_etapa_6
-    # mas após clicar processar, o fluxo de resultado deve rodar normalmente
+    _quiz_iniciar = st.session_state.get("quiz_iniciar_processamento", False)
     _processado_loc = st.session_state.get("processado_loc", False)
-    if not _processado_loc:
+
+    if _processado_loc:
+        # Já processou — cai no fluxo normal para mostrar resultados
+        pass
+    elif _quiz_iniciar:
+        # Usuário clicou em processar no quiz — limpar flag e deixar o fluxo
+        # de locação rodar normalmente (if tipo_atendimento == "locacao" abaixo)
+        # Para isso, precisamos que as variáveis do painel estejam mapeadas
+        # O fluxo principal espera: upload_locador, upload_locatario, etc. (mesmas keys)
+        # e imovel_dados — que precisa ser montado aqui
+        _fin = st.session_state.get("finalidade_imovel", "Residencial")
+        _mat = st.session_state.get("mat_imovel", "")
+        _imovel_quiz = {"finalidade": _fin, "matricula": _mat}
+        if _fin == "Residencial":
+            _imovel_quiz.update({
+                "tipo_imovel":  st.session_state.get("tipo_res", "Casa"),
+                "area":         st.session_state.get("area_res", 0) or "",
+                "quartos":      st.session_state.get("quartos_r", 0),
+                "suites":       st.session_state.get("suites_r", 0),
+                "banheiros":    st.session_state.get("banhos_r", 0),
+                "salas":        st.session_state.get("salas_r", 0),
+                "vagas":        st.session_state.get("vagas_r", 0),
+                "mobiliado":    st.session_state.get("mob_r", "Não"),
+                "cozinha":      st.session_state.get("coz_r", True),
+                "area_servico": st.session_state.get("as_r", False),
+                "varanda":      st.session_state.get("var_r", False),
+                "quintal":      st.session_state.get("qui_r", False),
+                "descricao":    st.session_state.get("desc_res", ""),
+            })
+        else:
+            _imovel_quiz.update({
+                "tipo_imovel":          st.session_state.get("tipo_com", "Sala comercial"),
+                "area":                 st.session_state.get("area_com", 0) or "",
+                "salas_internas":       st.session_state.get("salas_c", 0),
+                "banheiros":            st.session_state.get("banhos_c", 0),
+                "vagas":                st.session_state.get("vagas_c", 0),
+                "recepcao":             st.session_state.get("rec_c", False),
+                "deposito":             st.session_state.get("dep_c", False),
+                "copa":                 st.session_state.get("copa_c", False),
+                "atividade_permitida":  st.session_state.get("ativ_c", ""),
+                "cnae":                 st.session_state.get("cnae_c", ""),
+                "descricao":            st.session_state.get("desc_com", ""),
+            })
+        # Endereço e financeiro
+        _pix = {}
+        if st.session_state.get("forma_pagamento") == "PIX":
+            _pix = {
+                "chave":      st.session_state.get("pix_chave", ""),
+                "favorecido": st.session_state.get("pix_favorecido", ""),
+                "banco":      st.session_state.get("pix_banco", ""),
+                "tipo":       st.session_state.get("pix_tipo", "CPF"),
+            }
+        _imovel_quiz.update({
+            "valor_aluguel":    st.session_state.get("valor_aluguel", 0),
+            "dia_vencimento":   st.session_state.get("dia_vencimento", 5),
+            "forma_pagamento":  st.session_state.get("forma_pagamento", "PIX"),
+            "duracao_contrato": st.session_state.get("duracao_contrato", "12 meses"),
+            "data_inicio":      str(st.session_state.get("data_inicio_contrato", "")),
+            "pix_dados":        _pix,
+            "fotos":            len(st.session_state.get("fotos_imovel", [])),
+            "intermediacao":    {},
+            "cidade":           st.session_state.get("quiz_end_cidade", ""),
+            "uf":               st.session_state.get("quiz_end_uf", ""),
+        })
+        st.session_state["quiz_imovel_dados"] = _imovel_quiz
+        st.session_state["quiz_iniciar_processamento"] = False
+        # Não chama st.stop() — o bloco elif tipo_atendimento == "locacao" vai rodar
+    else:
+        # Quiz normal — mostra etapas e para
         executar_modo_quiz()
         st.stop()
-    # Se já processou, cai no fluxo normal para mostrar resultados
 elif _modo_interface == "quiz" and tipo_atendimento == "credito":
     # Crédito: mostrar etapa 1 do quiz uma vez, depois redireciona ao painel
     if not st.session_state.get("processado"):
@@ -3234,6 +3301,26 @@ if tipo_atendimento == "credito":
 # ══════════════════════════════════════════════════════
 elif tipo_atendimento == "locacao":
 
+  # ── Se vier do modo quiz com flag de processar, pula toda a UI e vai direto ──
+  _vindo_do_quiz = (
+      st.session_state.get("modo_interface") == "quiz"
+      and st.session_state.get("quiz_imovel_dados") is not None
+      and not st.session_state.get("quiz_iniciar_processamento", True)
+  )
+  if _vindo_do_quiz and not st.session_state.get("processado_loc"):
+      # Monta as variáveis que o bloco de processamento espera
+      upload_locador   = st.session_state.get("upload_locador",   [])
+      upload_locatario = st.session_state.get("upload_locatario", [])
+      tem_fiador       = st.session_state.get("quiz_tem_fiador", False)
+      upload_fiador    = st.session_state.get("upload_fiador",   []) if tem_fiador else []
+      imovel_dados     = st.session_state.get("quiz_imovel_dados", {})
+      finalidade_imovel = imovel_dados.get("finalidade", "")
+      fotos_upload     = st.session_state.get("fotos_imovel", [])
+      processar_loc    = True  # simula o clique do botão
+  else:
+      processar_loc = False  # será definido pelo botão abaixo
+      _vindo_do_quiz = False
+
   # helper CSS inline para mini checklist
   def render_mini_checklist(ok_items, falta_items):
       for i in ok_items:
@@ -3241,8 +3328,11 @@ elif tipo_atendimento == "locacao":
       for i in falta_items:
           st.markdown(f"<span style='color:#C62828;font-size:12px;font-weight:600;'>{i}</span>", unsafe_allow_html=True)
 
-  # ── BLOCO 01 — LOCADOR ──
-  with st.container(border=True):
+  # ── UI do painel — só renderiza no modo painel (não no quiz) ──
+  if not _vindo_do_quiz:
+
+   # ── BLOCO 01 — LOCADOR ──
+   with st.container(border=True):
       st.markdown("""
       <div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
           <span style='background:#1565C0;color:white;font-size:12px;font-weight:700;
@@ -3652,10 +3742,11 @@ elif tipo_atendimento == "locacao":
           "aviso_rescisao":  aviso_interm,
       }
 
-  imovel_dados["intermediacao"] = interm_dados
-
-  st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-  processar_loc = st.button("⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO", type="primary", use_container_width=True, key="btn_processar_locacao")
+  if not _vindo_do_quiz:
+      imovel_dados["intermediacao"] = interm_dados
+      st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+      processar_loc = st.button("⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO", type="primary", use_container_width=True, key="btn_processar_locacao")
+  # (se _vindo_do_quiz, processar_loc já foi definido como True e imovel_dados já está montado)
 
   if processar_loc:
     # ── Bloqueios obrigatórios ──
