@@ -2773,28 +2773,18 @@ elif tipo_atendimento == "locacao":
 
 # ── Painel de configuração + Sair ──
 st.divider()
-st.markdown("""
-<div style='background:#ffffff;border-radius:12px;padding:22px 24px;
-     box-shadow:0 2px 10px rgba(0,0,0,0.06);margin-bottom:12px;'>
-    <div style='font-size:15px;font-weight:700;color:#1A1A2E;margin-bottom:4px;'>
-        📤 Configuração de envio de email
-    </div>
-    <div style='font-size:12px;color:#5C6B7A;'>
-        Configure uma vez e envie documentos ao correspondente com 1 clique
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
-cfg_destino_r   = st.text_input("📧 Email destino",         value=st.session_state.get("cfg_destino",""),   placeholder="destinatario@email.com", key="cfg_destino_rod")
-cfg_remetente_r = st.text_input("📤 Seu Gmail (remetente)", value=st.session_state.get("cfg_remetente",""), placeholder="seuemail@gmail.com",     key="cfg_remetente_rod")
-cfg_senha_r     = st.text_input("🔑 Senha de app Gmail",    value=st.session_state.get("cfg_senha",""),     type="password", placeholder="Não é sua senha — gere em: Minha Conta Google → Segurança → Senhas de app", key="cfg_senha_rod")
-st.caption("💡 Como gerar: myaccount.google.com → Segurança → Senhas de app")
-
-if st.button("💾 Salvar configuração de email", use_container_width=True, key="salvar_cfg_rod"):
-    st.session_state["cfg_destino"]   = cfg_destino_r
-    st.session_state["cfg_remetente"] = cfg_remetente_r
-    st.session_state["cfg_senha"]     = cfg_senha_r
-    st.success("✅ Configuração salva com sucesso!")
+with st.expander("📤 Configuração de envio de email", expanded=False):
+    st.caption("Configure uma vez e envie documentos ao correspondente com 1 clique.")
+    cfg_destino_r   = st.text_input("📧 Email destino",         value=st.session_state.get("cfg_destino",""),   placeholder="destinatario@email.com", key="cfg_destino_rod")
+    cfg_remetente_r = st.text_input("📤 Seu Gmail (remetente)", value=st.session_state.get("cfg_remetente",""), placeholder="seuemail@gmail.com",     key="cfg_remetente_rod")
+    cfg_senha_r     = st.text_input("🔑 Senha de app Gmail",    value=st.session_state.get("cfg_senha",""),     type="password", placeholder="Não é sua senha — gere em: Minha Conta Google → Segurança → Senhas de app", key="cfg_senha_rod")
+    st.caption("💡 Como gerar: myaccount.google.com → Segurança → Senhas de app")
+    if st.button("💾 Salvar configuração de email", use_container_width=True, key="salvar_cfg_rod"):
+        st.session_state["cfg_destino"]   = cfg_destino_r
+        st.session_state["cfg_remetente"] = cfg_remetente_r
+        st.session_state["cfg_senha"]     = cfg_senha_r
+        st.success("✅ Configuração salva com sucesso!")
 
 st.divider()
 
