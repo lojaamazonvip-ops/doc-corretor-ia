@@ -432,6 +432,34 @@ st.markdown("""
     .stDeployButton{display:none!important;}
     a[href*="streamlit.io"]{display:none!important;}
 
+    /* ── Barra de conta discreta ── */
+    [data-testid="stPopover"] > button {
+        font-size: 0.7rem !important;
+        font-weight: 400 !important;
+        padding: 1px 8px !important;
+        min-height: 0 !important;
+        height: 22px !important;
+        line-height: 1 !important;
+        border-radius: 11px !important;
+        border: 1px solid #D0D0D0 !important;
+        background: transparent !important;
+        color: #999 !important;
+        box-shadow: none !important;
+        white-space: nowrap !important;
+    }
+    [data-testid="stPopover"] > button:hover {
+        background: #F5F5F5 !important;
+        color: #444 !important;
+        border-color: #AAA !important;
+    }
+    /* Forçar que o botão popover não quebre o texto */
+    [data-testid="stPopover"] > button p {
+        font-size: 0.7rem !important;
+        line-height: 1 !important;
+        margin: 0 !important;
+        white-space: nowrap !important;
+    }
+
     /* Botão WhatsApp flutuante */
     .whatsapp-float {
         position: fixed;
@@ -2135,21 +2163,7 @@ if "tipo_atendimento" not in st.session_state:
 
     # ── Barra de conta (tela inicial) ──
     st.divider()
-    st.markdown("""
-    <style>
-    .rodape-conta button { font-size:0.72rem !important; padding:2px 10px !important;
-        min-height:0 !important; height:24px !important; line-height:1.2 !important;
-        border-radius:12px !important; border:1px solid #D5D5D5 !important;
-        background:transparent !important; color:#888 !important; box-shadow:none !important; }
-    .rodape-conta button:hover { background:#F0F0F0 !important; color:#333 !important; }
-    .rodape-conta [data-testid="stPopover"] button { font-size:0.72rem !important;
-        padding:2px 10px !important; min-height:0 !important; height:24px !important;
-        border-radius:12px !important; border:1px solid #D5D5D5 !important;
-        background:transparent !important; color:#888 !important; box-shadow:none !important; }
-    </style>
-    <div class="rodape-conta"></div>
-    """, unsafe_allow_html=True)
-    _bi_e, _bi_cfg, _bi_sup, _bi_out = st.columns([5, 0.8, 0.9, 0.7])
+    _bi_e, _bi_cfg, _bi_sup, _bi_out = st.columns([5, 0.9, 1.0, 0.8])
 
     with _bi_cfg:
         with st.popover("⚙️ email"):
@@ -3580,21 +3594,11 @@ elif tipo_atendimento == "locacao":
 
 # ── Barra discreta de conta (páginas de serviço) ──
 st.divider()
-st.markdown("""
-<style>
-.rodape-srv button { font-size:0.72rem !important; padding:2px 10px !important;
-    min-height:0 !important; height:24px !important; line-height:1.2 !important;
-    border-radius:12px !important; border:1px solid #D5D5D5 !important;
-    background:transparent !important; color:#888 !important; box-shadow:none !important; }
-.rodape-srv button:hover { background:#F0F0F0 !important; color:#333 !important; }
-</style>
-<div class="rodape-srv"></div>
-""", unsafe_allow_html=True)
 
 _em_servico = st.session_state.get("tipo_atendimento") in ("credito", "locacao")
 
 if _em_servico:
-    _cs1, _cs2 = st.columns([8, 0.7])
+    _cs1, _cs2 = st.columns([8, 0.8])
     with _cs2:
         if st.button("🚪 sair", key="sair_rodape"):
             for k in ["autenticado","cliente","cfg_destino","cfg_remetente","cfg_senha",
