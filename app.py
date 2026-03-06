@@ -379,7 +379,6 @@ def check_login():
             margin: 18px auto 0 auto;
             padding-top: 0 !important;
         }
-        /* Remove espaço interno do Streamlit acima do primeiro elemento */
         section[data-testid='stMain'] > div > div:first-child {
             padding-top: 0 !important;
         }
@@ -391,7 +390,7 @@ def check_login():
         }
         .bloco-logo img {
             width: 280px;
-            max-width: 90%;
+            max-width: 85%;
             height: auto;
         }
         .bloco-tagline {
@@ -405,6 +404,17 @@ def check_login():
             background: white;
             border-radius: 0 0 14px 14px;
             padding: 0 0 8px 0;
+        }
+        /* Login mobile */
+        @media (max-width: 480px) {
+            section[data-testid='stMain'] > div {
+                max-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 12px !important;
+            }
+            .bloco-logo { padding: 20px 0 8px 0 !important; }
+            .bloco-logo img { width: 220px !important; }
+            input { font-size: 16px !important; }
         }
         </style>
         """, unsafe_allow_html=True)
@@ -542,6 +552,133 @@ st.markdown("""
         border-radius: 10px;
         white-space: nowrap;
         box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    /* ══════════════════════════════════════
+       RESPONSIVO MOBILE (até 600px)
+       ══════════════════════════════════════ */
+    @media (max-width: 600px) {
+
+        /* Container principal sem padding lateral excessivo */
+        section[data-testid="stMain"] > div {
+            padding-left: 12px !important;
+            padding-right: 12px !important;
+        }
+        .block-container {
+            padding-left: 12px !important;
+            padding-right: 12px !important;
+            padding-top: 8px !important;
+        }
+
+        /* Logo tela inicial pós-login */
+        section[data-testid="stMain"] img[style*="width:220px"] {
+            width: 160px !important;
+        }
+
+        /* Cards de seção — padding menor em mobile */
+        .card-section-blue, .card-section-green,
+        .card-section-orange, .card-section-neutral {
+            padding: 12px 14px !important;
+        }
+
+        /* Botões ocupam largura total */
+        .stButton > button {
+            font-size: 0.85rem !important;
+            padding: 10px 8px !important;
+        }
+
+        /* Inputs com fonte legível (evita zoom no iOS) */
+        input, textarea, select,
+        [data-testid="stTextInput"] input,
+        [data-testid="stTextArea"] textarea {
+            font-size: 16px !important;
+        }
+
+        /* Colunas de upload viram empilhadas */
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap !important;
+            gap: 8px !important;
+        }
+        [data-testid="stHorizontalBlock"] > div {
+            min-width: 100% !important;
+            flex: 1 1 100% !important;
+        }
+
+        /* Exceto colunas de 3 polos — mantém lado a lado mas menor */
+        [data-testid="stHorizontalBlock"].polo-cols > div {
+            min-width: 30% !important;
+            flex: 1 1 30% !important;
+        }
+
+        /* Barra de conta — empilha centralizando */
+        [data-testid="stPopover"] > button {
+            font-size: 0.75rem !important;
+            padding: 6px 8px !important;
+            min-height: 32px !important;
+        }
+
+        /* WhatsApp flutuante menor em mobile */
+        .whatsapp-float .wa-circle {
+            width: 42px !important;
+            height: 42px !important;
+        }
+        .whatsapp-float .wa-circle svg {
+            width: 22px !important;
+            height: 22px !important;
+        }
+
+        /* Tela de login — sem margem lateral */
+        section[data-testid="stMain"] > div.main {
+            padding: 0 8px !important;
+        }
+
+        /* Score de risco — cards menores */
+        [data-testid="stMetric"] {
+            padding: 8px !important;
+        }
+
+        /* Histórico — texto menor */
+        .historico-card {
+            font-size: 12px !important;
+            padding: 8px 10px !important;
+        }
+
+        /* Expanders com padding menor */
+        [data-testid="stExpander"] > div {
+            padding: 8px !important;
+        }
+
+        /* Tabelas e radio horizontais viram verticais */
+        [data-testid="stRadio"] > div {
+            flex-direction: column !important;
+        }
+
+        /* Banner FREE/PRO menor */
+        .banner-free, .banner-pro {
+            font-size: 12px !important;
+            padding: 8px 10px !important;
+        }
+
+        /* Divider com menos margem */
+        hr {
+            margin: 8px 0 !important;
+        }
+    }
+
+    /* TABLET (601px - 900px) */
+    @media (min-width: 601px) and (max-width: 900px) {
+        .block-container {
+            padding-left: 20px !important;
+            padding-right: 20px !important;
+        }
+        section[data-testid="stMain"] > div {
+            padding-left: 16px !important;
+            padding-right: 16px !important;
+        }
+        /* Inputs sem zoom no iOS */
+        input, textarea {
+            font-size: 16px !important;
+        }
     }
 </style>
 
@@ -2030,8 +2167,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Cabeçalho com logo e tagline institucional ──
-exibir_logo(altura=320)
-st.markdown("<p class='tagline-inst'>Plataforma especializada em documentação para crédito imobiliário</p>", unsafe_allow_html=True)
+# Logo + tagline compactos no topo
+img_b64_main = LOGO_BASE64
+try:
+    import os as _os, base64 as _b64
+    if _os.path.exists("logo_imobflow.png"):
+        with open("logo_imobflow.png", "rb") as _f:
+            img_b64_main = _b64.b64encode(_f.read()).decode()
+except: pass
+st.markdown(f"""
+<div style="text-align:center; padding: 10px 0 2px 0; margin-top: -30px;">
+    <img src="data:image/png;base64,{img_b64_main}"
+         style="width:220px; height:auto; max-width:80%;">
+    <p style="font-size:11px; color:#9AA8B5; margin:2px 0 0 0;
+              font-style:italic; letter-spacing:0.4px;">
+        Plataforma especializada em documentação para crédito imobiliário
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Banner contextual FREE/PRO ──
 _cliente_top = st.session_state.get("cliente", {})
