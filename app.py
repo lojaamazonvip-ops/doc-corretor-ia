@@ -3390,33 +3390,6 @@ elif tipo_atendimento == "locacao":
         )
         st.success("✅ Contrato pronto! Revise antes de assinar.")
 
-        # ── Dossiê PDF ──
-        _d_loc   = st.session_state.get("dados_locador",   {})
-        _d_locat = st.session_state.get("dados_locatario", {})
-        _d_fiad  = st.session_state.get("dados_fiador",    {})
-        _imovel  = st.session_state.get("imovel_loc",      {})
-        _email_t = st.session_state.get("email_gerado_loc","")
-        _score_d = st.session_state.get("score_risco_loc")
-        _termo_d = st.session_state.get("termo_vistoria_loc")
-        if st.button("📁 Gerar Dossiê Completo do Cliente (PDF)", use_container_width=True, key="btn_dossie"):
-            with st.spinner("📁 Montando dossiê..."):
-                _dossie = gerar_dossie_pdf(
-                    _d_loc, _d_locat, _d_fiad, _imovel,
-                    contrato_bytes=st.session_state["contrato_gerado"],
-                    termo_bytes=_termo_d,
-                    email_texto=_email_t,
-                    score=_score_d
-                )
-                st.session_state["dossie_gerado"] = _dossie
-        if st.session_state.get("dossie_gerado"):
-            st.download_button(
-                "⬇️ Baixar Dossiê do Cliente (PDF)",
-                data=st.session_state["dossie_gerado"],
-                file_name=f"Dossie_{_d_locat.get('nome_completo','Cliente').split()[0]}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                key="dl_dossie"
-            )
 
         if st.button("✏️ Editar dados novamente", use_container_width=True, key="btn_reeditar"):
             st.session_state["revisao_aberta"] = True
