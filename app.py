@@ -1005,6 +1005,7 @@ def gerar_contrato_pdf(dados_locador, dados_locatario, dados_fiador, imovel, cla
     banheiros   = imovel.get("banheiros","")
     vagas       = imovel.get("vagas","")
     cidade_imovel = imovel.get("cidade","")
+    uf_imovel     = imovel.get("uf","")
 
     try:    valor_fmt = f"R$ {float(valor):,.2f}".replace(",","X").replace(".",",").replace("X",".")
     except: valor_fmt = str(valor)
@@ -1316,9 +1317,9 @@ def gerar_contrato_pdf(dados_locador, dados_locatario, dados_fiador, imovel, cla
     # ── CLÁUSULA FORO ──
     story += [
         p(f"CLÁUSULA {clausula_foro_num} — DO FORO", h2_s),
-        p(f"<b>As partes elegem o Foro da Comarca do imóvel locado</b>"
-          f"{f', {cidade_imovel}' if cidade_imovel else ''}"
-          f" como competente para dirimir quaisquer dúvidas ou litígios oriundos deste contrato, "
+        p(f"<b>As partes elegem o Foro da Comarca de "
+          f"{'<b>' + cidade_imovel + ('/' + uf_imovel if uf_imovel else '') + '</b>' if cidade_imovel else 'localização do imóvel locado'}"
+          f"</b> como competente para dirimir quaisquer dúvidas ou litígios oriundos deste contrato, "
           f"renunciando expressamente a qualquer outro, por mais privilegiado que seja, "
           f"nos termos do Art. 63 do Código de Processo Civil."),
         hr(), sp(0.3),
@@ -1328,7 +1329,8 @@ def gerar_contrato_pdf(dados_locador, dados_locatario, dados_fiador, imovel, cla
     story += [
         p(f"E por estarem assim justos e acordados, firmam o presente instrumento particular em "
           f"<b>2 (duas) vias</b> de igual teor e forma, na presença de 2 (duas) testemunhas, "
-          f"constituindo título executivo extrajudicial (Art. 784, VIII, CPC), na cidade, "
+          f"constituindo título executivo extrajudicial (Art. 784, VIII, CPC), "
+          f"na cidade de {cidade_imovel + '/' + uf_imovel if cidade_imovel else 'local do imóvel'}, "
           f"aos {data_hoje}.", center_s),
         p("Nota: Documento gerado pela plataforma ImobFlow. Recomenda-se revisão por assessoria jurídica antes da assinatura.", note_s),
         sp(1.5),
@@ -1402,9 +1404,9 @@ def extrair_dados_polo(arquivos_bytes, polo, texto_bruto=""):
     """Extrai dados de um polo jurídico específico de forma isolada."""
     campos_por_polo = {
         "locador": {
-            "campos": ["nome_completo","cpf","rg","orgao_expedidor","estado_civil","endereco","profissao","telefone","email"],
+            "campos": ["nome_completo","cpf","rg","orgao_expedidor","estado_civil","endereco","cidade_imovel","uf_imovel","profissao","telefone","email"],
             "foco": "LOCADOR (proprietário do imóvel)",
-            "campos_json": '{"nome_completo":"","cpf":"","rg":"","orgao_expedidor":"","estado_civil":"","endereco":"","profissao":"","telefone":"","email":""}'
+            "campos_json": '{"nome_completo":"","cpf":"","rg":"","orgao_expedidor":"","estado_civil":"","endereco":"","cidade_imovel":"","uf_imovel":"","profissao":"","telefone":"","email":""}'
         },
         "locatario": {
             "campos": ["nome_completo","cpf","rg","orgao_expedidor","estado_civil","profissao","renda_valor","renda_tipo","endereco","telefone","email","tipo_garantia"],
@@ -2590,6 +2592,14 @@ elif tipo_atendimento == "locacao":
         dados_locatario_ext = resultados.get("dados_locatario", {})
         dados_fiador_ext    = resultados.get("dados_fiador",    {}) if bytes_fiador else {}
 
+        # Extrair cidade/UF do imóvel a partir dos dados do locador (endereço do proprietário)
+        cidade_extraida = dados_locador_ext.get("cidade_imovel", "").strip()
+        uf_extraida     = dados_locador_ext.get("uf_imovel", "").strip()
+        if cidade_extraida and not imovel_dados.get("cidade"):
+            imovel_dados["cidade"] = cidade_extraida
+        if uf_extraida and not imovel_dados.get("uf"):
+            imovel_dados["uf"] = uf_extraida
+
         # Mesclar campos manuais (email e telefone) — têm prioridade sobre os extraídos
         def _mesclar_manual(dados, key_email, key_tel):
             email_m = st.session_state.get(key_email, "").strip()
@@ -2938,6 +2948,17 @@ elif tipo_atendimento == "locacao":
                 r_data_inicio = st.text_input("Data de início",        value=str(d_imovel.get("data_inicio","")),         key="r_data_inicio")
                 r_finalidade  = st.text_input("Finalidade",            value=d_imovel.get("finalidade","Residencial"),    key="r_finalidade")
 
+            col_cidade, col_uf = st.columns([3,1])
+            with col_cidade:
+                r_cidade = st.text_input("🏙️ Cidade do imóvel (foro contratual)",
+                    value=d_imovel.get("cidade",""),
+                    placeholder="Ex: Caruaru — extraída automaticamente dos documentos",
+                    key="r_cidade_imovel")
+            with col_uf:
+                r_uf = st.text_input("UF", value=d_imovel.get("uf","PE"), placeholder="PE", key="r_uf_imovel")
+            if not d_imovel.get("cidade"):
+                st.caption("💡 Cidade será preenchida automaticamente ao processar os documentos do Locador.")
+
             st.markdown("</div>", unsafe_allow_html=True)
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -2975,6 +2996,8 @@ elif tipo_atendimento == "locacao":
                     "duracao_contrato":  r_duracao,
                     "data_inicio":       r_data_inicio,
                     "finalidade":        r_finalidade,
+                    "cidade":            r_cidade,
+                    "uf":                r_uf,
                 })
                 # Salva os dados revisados no session_state para uso posterior (email etc.)
                 st.session_state["dados_locador"]   = dados_loc_rev
