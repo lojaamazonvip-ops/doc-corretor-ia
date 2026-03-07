@@ -3873,14 +3873,7 @@ elif tipo_atendimento == "locacao_contrato":
             data=st.session_state["lc_contrato_bytes"],
             file_name="Contrato_Locacao.pdf", mime="application/pdf",
             use_container_width=True, key="dl_lc_contrato")
-        st.markdown("""
-        <a href="javascript:window.print()" target="_self"
-            style="display:block;text-align:center;padding:13px;background:#E64A19;color:white;
-            border-radius:8px;text-decoration:none;font-weight:700;font-size:15px;margin-top:8px;">
-            🖨️ Imprimir Contrato
-        </a>
-        """, unsafe_allow_html=True)
-        st.success("✅ Contrato pronto! Baixe ou imprima antes de assinar.")
+        st.success("✅ Contrato pronto! Revise antes de assinar.")
         if st.button("✏️ Editar dados novamente", use_container_width=True, key="btn_reeditar_lc"):
             st.session_state["lc_revisao_aberta"] = True
             st.session_state["lc_contrato_bytes"] = None
