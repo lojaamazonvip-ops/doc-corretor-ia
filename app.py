@@ -2853,6 +2853,36 @@ def quiz_etapa_5():
         st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 4px 0;'>📤 Para quem vai a documentação?</div>", unsafe_allow_html=True)
         st.text_input("", placeholder="Ex: Imobiliária Central, Sr. João...", key="nome_dest_locacao", label_visibility="collapsed")
 
+        # Intermediação imobiliária
+        st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 4px 0;'>🤝 Intermediação Imobiliária <span style='font-weight:400;color:#9CA3AF;font-size:12px;'>(opcional)</span></div>", unsafe_allow_html=True)
+        tem_interm_quiz = st.checkbox("Há corretor ou imobiliária intermediando?", key="quiz_tem_interm")
+        if tem_interm_quiz:
+            with st.container(border=True):
+                col_ti1, col_ti2 = st.columns(2)
+                with col_ti1: st.selectbox("Tipo", ["Corretor Autônomo","Imobiliária","Correspondente Imobiliário"], key="tipo_interm")
+                with col_ti2: st.text_input("CRECI / CNPJ", placeholder="Ex: 12345-F", key="creci_interm")
+                col_ti3, col_ti4 = st.columns(2)
+                with col_ti3: st.text_input("Nome / Razão social", placeholder="Nome completo", key="nome_interm")
+                with col_ti4: st.text_input("CPF / CNPJ", placeholder="000.000.000-00", key="cpf_cnpj_interm")
+                col_ti5, col_ti6 = st.columns(2)
+                with col_ti5: st.text_input("Telefone", placeholder="(81) 99999-0000", key="tel_interm")
+                with col_ti6: st.text_input("E-mail", placeholder="corretor@email.com", key="email_interm")
+
+                st.markdown("<div style='font-size:12px;font-weight:700;color:#1A1A2E;margin:10px 0 4px 0;'>💰 Comissão</div>", unsafe_allow_html=True)
+                col_mc, col_vc2 = st.columns(2)
+                with col_mc: st.selectbox("Modelo", ["1º aluguel integral ao intermediador","Percentual sobre o aluguel","Valor fixo"], key="modelo_comissao")
+                with col_vc2: st.text_input("Valor / %", placeholder="Ex: 100% ou R$ 1.200", key="valor_comissao_str")
+
+                tem_adm_quiz = st.checkbox("Possui taxa de administração mensal?", key="tem_adm")
+                if tem_adm_quiz:
+                    col_ta1, col_ta2 = st.columns(2)
+                    with col_ta1: st.text_input("Taxa de administração", placeholder="Ex: 10% ou R$ 150", key="taxa_adm_str")
+                    with col_ta2: st.multiselect("Serviços incluídos", ["Cobrança","Repasse","Vistoria","Renovação","Jurídico"], key="servicos_adm")
+
+                col_vig, col_av = st.columns(2)
+                with col_vig: st.text_input("Vigência", placeholder="Mesma do contrato", key="vigencia_interm")
+                with col_av:  st.text_input("Aviso prévio rescisão", placeholder="30 dias", key="aviso_interm")
+
         # Validação de área
         area_quiz = st.session_state.get("area_res", 0) if finalidade == "Residencial" else st.session_state.get("area_com", 0)
         area_ok   = area_quiz and area_quiz > 0
@@ -3067,7 +3097,21 @@ if _modo_interface == "quiz" and tipo_atendimento == "locacao":
             "data_inicio":      str(st.session_state.get("data_inicio_contrato", "")),
             "pix_dados":        _pix,
             "fotos":            len(st.session_state.get("fotos_imovel", [])),
-            "intermediacao":    {},
+            "intermediacao": {
+                "tipo":            st.session_state.get("tipo_interm", ""),
+                "nome":            st.session_state.get("nome_interm", ""),
+                "creci_cnpj":      st.session_state.get("creci_interm", ""),
+                "cpf_cnpj":        st.session_state.get("cpf_cnpj_interm", ""),
+                "telefone":        st.session_state.get("tel_interm", ""),
+                "email":           st.session_state.get("email_interm", ""),
+                "modelo_comissao": st.session_state.get("modelo_comissao", ""),
+                "valor_comissao":  st.session_state.get("valor_comissao_str", ""),
+                "tem_adm":         st.session_state.get("tem_adm", False),
+                "taxa_adm":        st.session_state.get("taxa_adm_str", ""),
+                "servicos_adm":    st.session_state.get("servicos_adm", []) if st.session_state.get("tem_adm") else [],
+                "vigencia":        st.session_state.get("vigencia_interm", ""),
+                "aviso_rescisao":  st.session_state.get("aviso_interm", ""),
+            } if st.session_state.get("quiz_tem_interm") else {},
             "cidade":           st.session_state.get("quiz_end_cidade", ""),
             "uf":               st.session_state.get("quiz_end_uf", ""),
         })
