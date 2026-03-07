@@ -3343,13 +3343,18 @@ elif tipo_atendimento == "locacao":
 
     st.divider()
 
-    # ── Monta lista de selecionados para envio ──
+    # ── Documentação organizada — lista, seleção e download por polo ──
+    st.markdown("""
+    <div class='card-section-neutral'>
+        <p class='section-title'>✅ Documentação organizada e pronta</p>
+        <p class='section-subtitle'>Baixe por polo ou tudo de uma vez — o ZIP completo já vem com pastas separadas</p>
+    </div>
+    """, unsafe_allow_html=True)
+
     pdfs_polo_locador   = st.session_state.get("pdfs_polo_locador",   [])
     pdfs_polo_locatario = st.session_state.get("pdfs_polo_locatario", [])
     pdfs_polo_fiador    = st.session_state.get("pdfs_polo_fiador",    [])
-    selecionados_loc = pdfs_polo_locador + pdfs_polo_locatario + pdfs_polo_fiador
 
-    # ── ZIP completo para download ──
     def _fazer_zip(lista_pdfs, pasta="", extras=None):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
@@ -3362,13 +3367,55 @@ elif tipo_atendimento == "locacao":
         return buf
 
     tem_fiador_ativo = st.session_state.get("tem_fiador_check", False)
+    selecionados_loc = []
+
+    def _bloco_polo(label, cor, pdfs_lista, prefixo_key):
+        st.markdown(
+            f"<div style='font-size:12px;font-weight:700;color:{cor};"
+            f"margin-bottom:4px;'>{label}</div>",
+            unsafe_allow_html=True)
+        for idx, (nome, conteudo) in enumerate(pdfs_lista):
+            marcado = st.checkbox(
+                f"📄 {nome}", value=True,
+                key=f"sel_{prefixo_key}_{idx}")
+            if marcado:
+                selecionados_loc.append((nome, conteudo))
+        if pdfs_lista:
+            zip_b = _fazer_zip(pdfs_lista)
+            st.download_button(
+                f"⬇️ ZIP {label.split()[-1]}",
+                data=zip_b,
+                file_name=f"Documentos_{prefixo_key}.zip",
+                mime="application/zip",
+                use_container_width=True,
+                key=f"zip_{prefixo_key}")
+        else:
+            st.caption("Nenhum arquivo")
+
+    colunas_polo = [1, 1, 1] if tem_fiador_ativo else [1, 1]
+    cols_polo = st.columns(colunas_polo)
+    with cols_polo[0]:
+        _bloco_polo("🏠 LOCADOR",   "#1565C0", pdfs_polo_locador,   "locador")
+    with cols_polo[1]:
+        _bloco_polo("🔑 LOCATÁRIO", "#2E7D32", pdfs_polo_locatario, "locatario")
+    if tem_fiador_ativo:
+        with cols_polo[2]:
+            _bloco_polo("🤝 FIADOR", "#E65100", pdfs_polo_fiador,   "fiador")
+
+    # ── ZIP completo ──
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     lista_zip_completo = (
         [(f"Locador/{n}",   c) for n,c in pdfs_polo_locador] +
         [(f"Locatario/{n}", c) for n,c in pdfs_polo_locatario] +
         ([(f"Fiador/{n}",   c) for n,c in pdfs_polo_fiador] if tem_fiador_ativo else [])
     )
     zip_completo = _fazer_zip(lista_zip_completo)
-    st.divider()
+    st.markdown("""
+    <div style='background:#F5F5F5;border:1px solid #DEDEDE;border-radius:10px;padding:14px 18px;margin:6px 0;'>
+        <span style='font-weight:600;color:#333;font-size:0.95rem;'>📦 Download completo</span>
+        <span style='font-size:0.82rem;color:#777;margin-left:8px;'>— ZIP com pastas separadas por polo</span>
+    </div>
+    """, unsafe_allow_html=True)
     st.download_button(
         "⬇️ Baixar TODA a documentação em ZIP",
         data=zip_completo, file_name="Documentacao_Completa_Locacao.zip",
