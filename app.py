@@ -3375,6 +3375,7 @@ elif tipo_atendimento == "locacao":
       and st.session_state.get("quiz_imovel_dados") is not None
       and not st.session_state.get("quiz_iniciar_processamento", False)
   )
+  st.info(f"🔍 DEBUG2: _vindo_do_quiz={_vindo_do_quiz} | processado_loc={st.session_state.get('processado_loc', False)}")
   if _vindo_do_quiz and not st.session_state.get("processado_loc"):
 
       # Emula UploadedFile a partir dos bytes salvos no session_state
