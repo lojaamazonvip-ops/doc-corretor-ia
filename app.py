@@ -2364,72 +2364,17 @@ if "tipo_atendimento" not in st.session_state:
     </div>
     """, unsafe_allow_html=True)
 
-    # Se locação foi pré-selecionada, mostrar escolha de modo antes de entrar
-    _pre_loc = st.session_state.get("_pre_selecionar_locacao", False)
-
-    if not _pre_loc:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("🏠  Crédito Imobiliário", use_container_width=True, type="primary"):
-                st.session_state["tipo_atendimento"] = "credito"
-                st.session_state.pop("_pre_selecionar_locacao", None)
-                st.rerun()
-            st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Venda · Financiamento · FGTS</div>", unsafe_allow_html=True)
-        with col_b:
-            if st.button("🔑  Locação", use_container_width=True):
-                st.session_state["_pre_selecionar_locacao"] = True
-                st.rerun()
-            st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Aluguel · Análise de Inquilino</div>", unsafe_allow_html=True)
-    else:
-        # Tela de escolha de modo para Locação
-        st.markdown("""
-        <div style='max-width:560px;margin:0 auto 20px auto;text-align:center;'>
-            <div style='font-size:13px;font-weight:700;color:#2E7D32;
-                 text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;'>
-                🔑 Locação — Como deseja prosseguir?
-            </div>
-            <div style='font-size:13px;color:#5C6B7A;'>
-                Escolha o modo de trabalho para este atendimento
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        _mc1, _mc2 = st.columns(2)
-        with _mc1:
-            st.markdown("""
-            <div style='border:2px solid #1565C0;border-radius:12px;padding:18px 16px;
-                 text-align:center;margin-bottom:8px;background:#F0F4FF;'>
-                <div style='font-size:22px;margin-bottom:6px;'>📋</div>
-                <div style='font-size:14px;font-weight:700;color:#1565C0;margin-bottom:4px;'>Painel completo</div>
-                <div style='font-size:12px;color:#5C6B7A;'>Preencha todos os campos manualmente com controle total</div>
-            </div>
-            """, unsafe_allow_html=True)
-            if st.button("Entrar no Painel", use_container_width=True, key="ini_modo_painel"):
-                st.session_state["tipo_atendimento"] = "locacao"
-                st.session_state["modo_interface"] = "painel"
-                st.session_state.pop("_pre_selecionar_locacao", None)
-                st.rerun()
-
-        with _mc2:
-            st.markdown("""
-            <div style='border:2px solid #2E7D32;border-radius:12px;padding:18px 16px;
-                 text-align:center;margin-bottom:8px;background:#F0FFF4;'>
-                <div style='font-size:22px;margin-bottom:6px;'>🧭</div>
-                <div style='font-size:14px;font-weight:700;color:#2E7D32;margin-bottom:4px;'>Assistente guiado</div>
-                <div style='font-size:12px;color:#5C6B7A;'>Passo a passo interativo — ideal para novos atendimentos</div>
-            </div>
-            """, unsafe_allow_html=True)
-            if st.button("Iniciar Assistente", use_container_width=True, key="ini_modo_quiz"):
-                st.session_state["tipo_atendimento"] = "locacao"
-                st.session_state["modo_interface"] = "quiz"
-                st.session_state["etapa_quiz"] = 1
-                st.session_state.pop("_pre_selecionar_locacao", None)
-                st.rerun()
-
-        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-        if st.button("← Voltar", key="ini_voltar_loc"):
-            st.session_state.pop("_pre_selecionar_locacao", None)
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("🏠  Crédito Imobiliário", use_container_width=True, type="primary"):
+            st.session_state["tipo_atendimento"] = "credito"
             st.rerun()
+        st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Venda · Financiamento · FGTS</div>", unsafe_allow_html=True)
+    with col_b:
+        if st.button("🔑  Locação", use_container_width=True):
+            st.session_state["tipo_atendimento"] = "locacao"
+            st.rerun()
+        st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Aluguel · Análise de Inquilino</div>", unsafe_allow_html=True)
 
     # ── Histórico de Atendimentos ──
     _cli_hist = st.session_state.get("cliente", {})
@@ -2683,6 +2628,22 @@ def quiz_etapa_3():
 
 
 # ── ETAPA 4 — Upload de documentos ───────────────────────────────
+def _salvar_bytes_uploads():
+    """Persiste os bytes dos uploads no session_state para sobreviver ao st.rerun()."""
+    for chave in ["upload_locador", "upload_locatario", "upload_fiador"]:
+        arquivos = st.session_state.get(chave) or []
+        if arquivos:
+            salvos = []
+            for arq in arquivos:
+                try:
+                    conteudo = arq.read()
+                    arq.seek(0)  # rebobina para poder ser lido de novo
+                    salvos.append({"name": arq.name, "bytes": conteudo})
+                except Exception:
+                    pass
+            if salvos:
+                st.session_state[f"_bytes_{chave}"] = salvos
+
 def quiz_etapa_4():
     tem_fiador_quiz = st.session_state.get("quiz_tem_fiador", False)
     total_etapas    = 6 if tem_fiador_quiz else 6
@@ -2711,8 +2672,13 @@ def quiz_etapa_4():
                 accept_multiple_files=True,
                 type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
                 key="upload_locador",
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                on_change=_salvar_bytes_uploads
             )
+            # Mostrar contagem de bytes salvos se já houver
+            _bytes_loc = st.session_state.get("_bytes_upload_locador", [])
+            if _bytes_loc and not st.session_state.get("upload_locador"):
+                st.caption(f"✅ {len(_bytes_loc)} arquivo(s) salvo(s)")
             col_e, col_t = st.columns(2)
             with col_e: st.text_input("📧 E-mail do Locador", placeholder="locador@email.com", key="email_manual_locador")
             with col_t: st.text_input("📱 WhatsApp/Tel", placeholder="(81) 99999-0000", key="tel_manual_locador")
@@ -2734,8 +2700,12 @@ def quiz_etapa_4():
                 accept_multiple_files=True,
                 type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
                 key="upload_locatario",
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                on_change=_salvar_bytes_uploads
             )
+            _bytes_loct = st.session_state.get("_bytes_upload_locatario", [])
+            if _bytes_loct and not st.session_state.get("upload_locatario"):
+                st.caption(f"✅ {len(_bytes_loct)} arquivo(s) salvo(s)")
             col_e2, col_t2 = st.columns(2)
             with col_e2: st.text_input("📧 E-mail do Locatário", placeholder="locatario@email.com", key="email_manual_locatario")
             with col_t2: st.text_input("📱 WhatsApp/Tel", placeholder="(81) 99999-0000", key="tel_manual_locatario")
@@ -2758,21 +2728,21 @@ def quiz_etapa_4():
                     accept_multiple_files=True,
                     type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
                     key="upload_fiador",
-                    label_visibility="collapsed"
+                    label_visibility="collapsed",
+                    on_change=_salvar_bytes_uploads
                 )
+                _bytes_fiad = st.session_state.get("_bytes_upload_fiador", [])
+                if _bytes_fiad and not st.session_state.get("upload_fiador"):
+                    st.caption(f"✅ {len(_bytes_fiad)} arquivo(s) salvo(s)")
                 col_e3, col_t3 = st.columns(2)
                 with col_e3: st.text_input("📧 E-mail do Fiador", placeholder="fiador@email.com", key="email_manual_fiador")
                 with col_t3: st.text_input("📱 WhatsApp/Tel", placeholder="(81) 99999-0000", key="tel_manual_fiador")
 
-        # Validação antes de avançar
-        upload_loc  = st.session_state.get("upload_locador",  [])
-        upload_loct = st.session_state.get("upload_locatario", [])
-        upload_fiad = st.session_state.get("upload_fiador",   [])
-
+        # Validação — considera tanto widgets ativos quanto bytes salvos
         tudo_ok = (
-            bool(st.session_state.get("upload_locador"))
-            and bool(st.session_state.get("upload_locatario"))
-            and (not tem_fiador_quiz or bool(st.session_state.get("upload_fiador")))
+            bool(st.session_state.get("upload_locador") or st.session_state.get("_bytes_upload_locador"))
+            and bool(st.session_state.get("upload_locatario") or st.session_state.get("_bytes_upload_locatario"))
+            and (not tem_fiador_quiz or bool(st.session_state.get("upload_fiador") or st.session_state.get("_bytes_upload_fiador")))
         )
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -2999,21 +2969,39 @@ def executar_modo_quiz():
 
 tipo_atendimento = st.session_state.get("tipo_atendimento", "credito")
 
-# ── Badge do tipo de atendimento ──
+# ── Seletor de modo (Painel completo vs Assistente guiado) ──
 badge_cor  = "#1565C0" if tipo_atendimento == "credito" else "#2E7D32"
 badge_txt  = "🏠 Crédito Imobiliário" if tipo_atendimento == "credito" else "🔑 Locação"
-_modo_atual = st.session_state.get("modo_interface", "painel")
-_modo_label = "📋 Painel completo" if _modo_atual == "painel" else "🧭 Assistente guiado"
 
-st.markdown(f"""
-<div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
+_col_badge, _col_modo = st.columns([1, 2])
+with _col_badge:
+    st.markdown(f"""
     <span style='background:{badge_cor};color:white;font-size:11px;font-weight:700;
-          padding:3px 12px;border-radius:20px;letter-spacing:0.5px;'>
+          padding:3px 12px;border-radius:20px;letter-spacing:0.5px;
+          display:inline-block;margin-top:6px;'>
         {badge_txt}
     </span>
-    <span style='font-size:11px;color:#5C6B7A;'>{_modo_label}</span>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+
+with _col_modo:
+    _modo_atual = st.session_state.get("modo_interface", "painel")
+    _m1, _m2 = st.columns(2)
+    with _m1:
+        _class1 = "modo-btn-ativo" if _modo_atual == "painel" else "modo-btn-inativo"
+        st.markdown(f"<div class='{_class1}'>", unsafe_allow_html=True)
+        if st.button("📋 Painel completo", use_container_width=True, key="modo_painel"):
+            st.session_state["modo_interface"] = "painel"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    with _m2:
+        _class2 = "modo-btn-ativo" if _modo_atual == "quiz" else "modo-btn-inativo"
+        st.markdown(f"<div class='{_class2}'>", unsafe_allow_html=True)
+        if st.button("🧭 Assistente guiado", use_container_width=True, key="modo_quiz"):
+            st.session_state["modo_interface"] = "quiz"
+            if "etapa_quiz" not in st.session_state:
+                st.session_state["etapa_quiz"] = 1
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
 if st.button("↩ Trocar tipo de atendimento", key="trocar_tipo", use_container_width=True):
     for key in ["tipo_atendimento","pdfs_gerados","email_gerado","processado","dados",
@@ -3342,20 +3330,37 @@ elif tipo_atendimento == "locacao":
   _vindo_do_quiz = (
       st.session_state.get("modo_interface") == "quiz"
       and st.session_state.get("quiz_imovel_dados") is not None
-      and not st.session_state.get("quiz_iniciar_processamento", True)
+      and not st.session_state.get("quiz_iniciar_processamento", False)
   )
   if _vindo_do_quiz and not st.session_state.get("processado_loc"):
-      # Monta as variáveis que o bloco de processamento espera
-      upload_locador   = st.session_state.get("upload_locador",   [])
-      upload_locatario = st.session_state.get("upload_locatario", [])
-      tem_fiador       = st.session_state.get("quiz_tem_fiador", False)
-      upload_fiador    = st.session_state.get("upload_fiador",   []) if tem_fiador else []
-      imovel_dados     = st.session_state.get("quiz_imovel_dados", {})
+
+      # Emula UploadedFile a partir dos bytes salvos no session_state
+      class _FakeFile:
+          def __init__(self, nome, dados):
+              self.name = nome
+              self._dados = dados
+          def read(self): return self._dados
+          def seek(self, n): pass
+
+      def _restaurar_uploads(chave):
+          widget = st.session_state.get(chave) or []
+          if widget:
+              return widget
+          salvos = st.session_state.get(f"_bytes_{chave}", [])
+          return [_FakeFile(s["name"], s["bytes"]) for s in salvos]
+
+      tem_fiador        = st.session_state.get("quiz_tem_fiador", False)
+      upload_locador    = _restaurar_uploads("upload_locador")
+      upload_locatario  = _restaurar_uploads("upload_locatario")
+      upload_fiador     = _restaurar_uploads("upload_fiador") if tem_fiador else []
+      imovel_dados      = st.session_state.get("quiz_imovel_dados", {})
       finalidade_imovel = imovel_dados.get("finalidade", "")
-      fotos_upload     = st.session_state.get("fotos_imovel", [])
-      processar_loc    = True  # simula o clique do botão
+      fotos_upload      = st.session_state.get("fotos_imovel", [])
+      if "intermediacao" not in imovel_dados:
+          imovel_dados["intermediacao"] = {}
+      processar_loc     = True
   else:
-      processar_loc = False  # será definido pelo botão abaixo
+      processar_loc  = False
       _vindo_do_quiz = False
 
   # helper CSS inline para mini checklist
