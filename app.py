@@ -3807,15 +3807,26 @@ elif tipo_atendimento == "locacao":
             except Exception as e:
                 return nome, None, str(e)
 
-        tarefas = [
-            ("pdfs_locador",   processar_documentos, bytes_locador),
-            ("pdfs_locatario", processar_documentos, bytes_locatario),
-            ("dados_locador",  extrair_dados_polo,   bytes_locador,   "locador",   texto_loc_val),
-            ("dados_locatario",extrair_dados_polo,   bytes_locatario, "locatario", texto_loc_val),
-        ]
-        if bytes_fiador:
-            tarefas.append(("pdfs_fiador",  processar_documentos, bytes_fiador))
-            tarefas.append(("dados_fiador", extrair_dados_polo,   bytes_fiador, "fiador", texto_loc_val))
+        _modo_srv = st.session_state.get("quiz_modo_servico", "")
+        _so_email = _modo_srv in ("email_aluguel", "email_venda")
+
+        if _so_email:
+            tarefas = [
+                ("dados_locador",   extrair_dados_polo, bytes_locador,   "locador",   texto_loc_val),
+                ("dados_locatario", extrair_dados_polo, bytes_locatario, "locatario", texto_loc_val),
+            ]
+            if bytes_fiador:
+                tarefas.append(("dados_fiador", extrair_dados_polo, bytes_fiador, "fiador", texto_loc_val))
+        else:
+            tarefas = [
+                ("pdfs_locador",   processar_documentos, bytes_locador),
+                ("pdfs_locatario", processar_documentos, bytes_locatario),
+                ("dados_locador",  extrair_dados_polo,   bytes_locador,   "locador",   texto_loc_val),
+                ("dados_locatario",extrair_dados_polo,   bytes_locatario, "locatario", texto_loc_val),
+            ]
+            if bytes_fiador:
+                tarefas.append(("pdfs_fiador",  processar_documentos, bytes_fiador))
+                tarefas.append(("dados_fiador", extrair_dados_polo,   bytes_fiador, "fiador", texto_loc_val))
 
         total = len(tarefas)
         concluidas = 0
@@ -3886,18 +3897,22 @@ elif tipo_atendimento == "locacao":
         # Todos os PDFs combinados para download
         pdfs_loc = pdfs_locador + pdfs_locatario + pdfs_fiador
 
-        # Gerar cláusula contratual
-        barra.progress(75, text="⚖️ Gerando cláusula contratual...")
-        clausula_loc = ""
-        if finalidade_imovel == "Residencial":
-            clausula_loc = gerar_clausula_residencial(imovel_dados)
-        elif finalidade_imovel == "Comercial":
-            clausula_loc = gerar_clausula_comercial(imovel_dados)
+        _modo_servico_atual = st.session_state.get("quiz_modo_servico", "")
+        _is_email = _modo_servico_atual in ("email_aluguel", "email_venda")
 
-        barra.progress(82, text="📷 Analisando fotos do imóvel...")
+        # Gerar cláusula contratual — só para contratos
+        barra.progress(75, text="⚖️ Gerando cláusula contratual..." if not _is_email else "📧 Montando email...")
+        clausula_loc = ""
+        if not _is_email:
+            if finalidade_imovel == "Residencial":
+                clausula_loc = gerar_clausula_residencial(imovel_dados)
+            elif finalidade_imovel == "Comercial":
+                clausula_loc = gerar_clausula_comercial(imovel_dados)
+
+        barra.progress(82, text="📷 Analisando fotos do imóvel..." if not _is_email else "📧 Montando email...")
         termo_vistoria_bytes = None
         fotos_nomes = []
-        if fotos_upload:
+        if fotos_upload and not _is_email:
             fotos_bytes_raw = []
             for foto in fotos_upload:
                 conteudo_foto = foto.read()
