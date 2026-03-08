@@ -3730,6 +3730,9 @@ if tipo_atendimento == "credito":
 # ══════════════════════════════════════════════════════
 elif tipo_atendimento == "locacao":
 
+  # Se veio do quiz e já processou — pula direto para resultados (st.stop() no final)
+  _quiz_ativo = bool(st.session_state.get("quiz_modo_servico"))
+
   # ── Se vier do modo quiz com flag de processar, pula toda a UI e vai direto ──
   _vindo_do_quiz = (
       st.session_state.get("modo_interface") == "quiz"
@@ -4041,6 +4044,10 @@ elif tipo_atendimento == "locacao":
                   render_mini_checklist(ok_l, falta_l)
           else:
               st.caption(f"📎 {len(upload_locador)} arquivo(s) do locador selecionado(s)")
+
+  # Quando quiz ativo — não renderiza o painel, vai direto para resultados
+  if _quiz_ativo:
+      st.stop()
 
   # ── BLOCO 02 — LOCATÁRIO ──
   with st.container(border=True):
@@ -4428,6 +4435,10 @@ elif tipo_atendimento == "locacao":
   # (se _vindo_do_quiz, processar_loc já foi definido como True e imovel_dados já está montado)
 
   if st.session_state.get("processado_loc"):
+    # Se veio do quiz e já processou — mostra resultados e para (não renderiza painel)
+    if _quiz_ativo:
+        pass  # continua para o bloco de resultados abaixo
+    # (no modo painel, o bloco de resultados também renderiza normalmente)
     pdfs_loc         = st.session_state["pdfs_gerados_loc"]
     email_loc        = st.session_state["email_gerado_loc"]
     dados_loc        = st.session_state.get("dados_loc", {})
