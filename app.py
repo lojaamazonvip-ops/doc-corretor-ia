@@ -933,291 +933,6 @@ def chamar_gemini(lista_parts):
 # BLOCO 2 — PROCESSAMENTO DE DOCUMENTOS
 # ══════════════════════════════════════════════════════
 
-# Tipos de documento reconhecidos pela IA
-TIPOS_DOC = [
-    "RG", "CNH", "CPF", "Certidão de Nascimento", "Certidão de Casamento",
-    "Holerite", "Extrato Bancário", "Decore", "Contrato de Trabalho",
-    "Pró-labore", "Declaração de IR", "Contrato de Prestação de Serviço",
-    "Comprovante de Residência", "Conta de Luz", "Conta de Água", "Conta de Internet",
-    "Escritura", "Matrícula de Imóvel", "IPTU",
-    "Outro"
-]
-
-# Mapa de tipo → categoria funcional
-_CATEGORIA_DOC = {
-    "RG":                            "identidade",
-    "CNH":                           "identidade",
-    "CPF":                           "cpf",
-    "Certidão de Nascimento":        "estado_civil",
-    "Certidão de Casamento":         "estado_civil",
-    "Holerite":                      "renda",
-    "Extrato Bancário":              "renda",
-    "Decore":                        "renda",
-    "Contrato de Trabalho":          "renda",
-    "Pró-labore":                    "renda",
-    "Declaração de IR":              "renda",
-    "Contrato de Prestação de Serviço": "renda",
-    "Comprovante de Residência":     "residencia",
-    "Conta de Luz":                  "residencia",
-    "Conta de Água":                 "residencia",
-    "Conta de Internet":             "residencia",
-    "Escritura":                     "imovel_proprio",
-    "Matrícula de Imóvel":           "imovel_proprio",
-    "IPTU":                          "imovel_proprio",
-    "Outro":                         "outro",
-}
-
-# Docs obrigatórios por polo
-_OBRIGATORIOS = {
-    "locatario": ["identidade", "renda", "residencia"],
-    "locador":   [],   # só texto de contexto já basta
-    "fiador":    ["identidade", "renda", "residencia"],
-}
-
-_LABELS_CAT = {
-    "identidade":    "RG ou CNH",
-    "cpf":           "CPF",
-    "renda":         "Comprovante de renda",
-    "residencia":    "Comprovante de residência",
-    "imovel_proprio":"Comprovante de imóvel próprio",
-}
-
-
-def parsear_contexto_partes(texto_contexto):
-    """
-    Detecta os nomes-chave (locador/proprietario, locatario, fiador) no texto
-    e coleta tudo que vem depois de cada um, independente do formato.
-    Extrai: nome, cpf, email, telefone, endereco_hint.
-    """
-    import re
-    if not texto_contexto:
-        return {}
-
-    # Nomes-chave → polo
-    CHAVES = [
-        (r'locatári[oa]|locatari[oa]|inquilin[oa]',  "locatario"),
-        (r'locador|proprietári[oa]|proprietari[oa]',  "locador"),
-        (r'fiador|fiadora|garantidor',                "fiador"),
-    ]
-
-    def _fmt_tel(raw):
-        d = re.sub(r'[^\d]', '', raw)
-        if len(d) == 11: return f"({d[:2]}) {d[2:7]}-{d[7:]}"
-        if len(d) == 10: return f"({d[:2]}) {d[2:6]}-{d[6:]}"
-        return raw.strip()
-
-    def _fmt_cpf(raw):
-        d = re.sub(r'[^\d]', '', raw)
-        if len(d) == 11:
-            return f"{d[:3]}.{d[3:6]}.{d[6:9]}-{d[9:]}"
-        return raw.strip()
-
-    def _extrair_info(bloco):
-        """Extrai email, telefone, CPF, nome e endereço de qualquer bloco de texto."""
-        info = {"nome": "", "cpf": "", "email": "", "telefone": "", "endereco_hint": ""}
-
-        # Email
-        m = re.search(r'[\w.\-+]+@[\w.\-]+\.[a-zA-Z]{2,}', bloco)
-        if m: info["email"] = m.group(0)
-
-        # CPF (formato xxx.xxx.xxx-xx ou 11 dígitos)
-        m = re.search(r'\d{3}[\.\s]?\d{3}[\.\s]?\d{3}[\-\s]?\d{2}', bloco)
-        if m: info["cpf"] = _fmt_cpf(m.group(0))
-
-        # Telefone (com ou sem DDD)
-        m = re.search(r'\(?\d{2}\)?\s*\d{4,5}[\-\s]\d{4}', bloco)
-        if m: info["telefone"] = _fmt_tel(m.group(0))
-
-        # Endereço — linha que começa com Rua, Av, etc.
-        m = re.search(r'(rua|av\.?|avenida|alameda|travessa|estrada|rodovia)[^\n,]+', bloco, re.IGNORECASE)
-        if m: info["endereco_hint"] = m.group(0).strip()
-
-        # Nome — campo explícito ou segundo token antes de "email/telefone/rua"
-        m = re.search(r'nome\s+completo\s*[:\-]\s*([^\n\*]+)', bloco, re.IGNORECASE)
-        if m:
-            info["nome"] = m.group(1).strip()
-        else:
-            # Pegar texto entre o nome-chave e a primeira vírgula/dois-pontos/info
-            # Ex: "locatario, Breno, email..." → "Breno"
-            m2 = re.search(
-                rf'(?:locatári[oa]|locatari[oa]|inquilin[oa]|locador|proprietári[oa]|proprietari[oa]|fiador|garantidor)'
-                rf'\W+([^,\n\*@\d]+?)(?:\s*,|\s*\n|\s*email|\s*telefone|\s*cpf|$)',
-                bloco, re.IGNORECASE
-            )
-            if m2:
-                nome_raw = m2.group(1).strip().strip(',').strip()
-                if nome_raw and len(nome_raw) > 1:
-                    info["nome"] = nome_raw
-
-        return info
-
-    # ── Dividir o texto nos blocos por nome-chave ──
-    # Construir padrão que detecta qualquer nome-chave
-    padrao_chave = '|'.join(p for p, _ in CHAVES)
-    # Encontrar posições dos nomes-chave
-    blocos = {}
-    matches = list(re.finditer(rf'(?i)(?:^|[\n,\s])({padrao_chave})', texto_contexto))
-
-    for i, m in enumerate(matches):
-        inicio = m.start()
-        fim    = matches[i+1].start() if i+1 < len(matches) else len(texto_contexto)
-        bloco  = texto_contexto[inicio:fim]
-
-        # Identificar polo
-        polo = None
-        for padrao, nome_polo in CHAVES:
-            if re.search(padrao, m.group(1), re.IGNORECASE):
-                polo = nome_polo
-                break
-        if polo:
-            blocos[polo] = _extrair_info(bloco)
-
-    return blocos
-
-def classificar_docs_por_tipo(todos_bytes, texto_contexto=""):
-    """
-    Recebe lista de {"name": ..., "bytes": ...} com todos os docs misturados.
-    Retorna lista de dicts com: name, tipo, categoria, polo, confianca.
-    Usa Gemini para identificar cada arquivo em uma única chamada.
-    """
-    if not todos_bytes:
-        return []
-
-    tipos_str = ", ".join(TIPOS_DOC)
-    prompt = f"""Você é um especialista em documentos imobiliários brasileiros.
-Analise cada documento abaixo e para cada um retorne:
-- "arquivo": nome do arquivo (exatamente como fornecido)
-- "tipo": o tipo do documento (um de: {tipos_str})
-- "polo": a qual parte pertence — use o CONTEXTO abaixo para identificar pelo nome, email ou endereço parcial
-  Valores possíveis de polo: "locatario", "locador", "fiador", "desconhecido"
-- "nome_pessoa": nome completo da pessoa identificada no documento (se legível)
-- "confianca": "alta", "media" ou "baixa"
-
-CONTEXTO DAS PARTES (fornecido pelo corretor):
-{texto_contexto if texto_contexto else "Não informado"}
-
-REGRAS:
-- CNH contém CPF e substitui RG+CPF
-- RG moderno pode conter CPF no verso
-- Holerite, extrato, decore = comprovante de renda
-- Conta de luz/água/internet/aluguel = comprovante de residência
-- Se não conseguir identificar o polo, use "desconhecido"
-- Se não conseguir identificar o tipo, use "Outro"
-
-RETORNE APENAS JSON válido, sem markdown:
-{{"documentos": [{{"arquivo":"","tipo":"","polo":"","nome_pessoa":"","confianca":""}}]}}
-"""
-    parts = [{"text": prompt}]
-    for doc in todos_bytes:
-        nome = doc["name"]
-        dados = doc["bytes"]
-        b64 = base64.b64encode(dados).decode("utf-8")
-        n = nome.lower()
-        if n.endswith(".pdf"):                mime = "application/pdf"
-        elif n.endswith(".png"):              mime = "image/png"
-        elif n.endswith(".webp"):             mime = "image/webp"
-        elif n.endswith(".bmp"):              mime = "image/bmp"
-        elif n.endswith((".tiff",".tif")):    mime = "image/tiff"
-        else:                                 mime = "image/jpeg"
-        parts += [{"text": f"ARQUIVO: {nome}"}, {"inline_data": {"mime_type": mime, "data": b64}}]
-
-    try:
-        resp  = chamar_gemini(parts)
-        dados = json.loads(resp.replace("```json","").replace("```","").strip())
-        resultado = []
-        for d in dados.get("documentos", []):
-            tipo = d.get("tipo", "Outro")
-            resultado.append({
-                "name":        d.get("arquivo", ""),
-                "tipo":        tipo,
-                "categoria":   _CATEGORIA_DOC.get(tipo, "outro"),
-                "polo":        d.get("polo", "desconhecido"),
-                "nome_pessoa": d.get("nome_pessoa", ""),
-                "confianca":   d.get("confianca", "baixa"),
-            })
-        return resultado
-    except Exception as e:
-        # Fallback: retorna todos como desconhecidos
-        return [{"name": d["name"], "tipo": "Outro", "categoria": "outro",
-                 "polo": "desconhecido", "nome_pessoa": "", "confianca": "baixa"}
-                for d in todos_bytes]
-
-
-def validar_checklist_locacao(docs_classificados, tem_fiador=False, texto_contexto=""):
-    """
-    Valida documentos obrigatórios cruzando arquivos + texto de contexto.
-    Só bloqueia se a informação não estiver em lugar nenhum.
-    """
-    polos_checar = ["locatario", "locador"]
-    if tem_fiador:
-        polos_checar.append("fiador")
-
-    ctx = parsear_contexto_partes(texto_contexto) if texto_contexto else {}
-    resultado = {"ok": True, "polos": {}}
-
-    for polo in polos_checar:
-        obrigatorios = _OBRIGATORIOS[polo]
-
-        # Locador (e qualquer polo sem obrigatórios) passa sempre
-        if not obrigatorios:
-            resultado["polos"][polo] = {"ok": True, "presentes": [], "no_texto": [], "faltando": []}
-            continue
-        info_ctx = ctx.get(polo, {})
-
-        # Categorias presentes nos arquivos
-        cats_presentes = set(
-            d["categoria"] for d in docs_classificados
-            if d["polo"] == polo and d["categoria"] != "outro"
-        )
-        if "identidade" in cats_presentes:
-            cats_presentes.add("cpf")
-
-        # O que o texto de contexto já cobre
-        cats_no_texto = set()
-        if info_ctx.get("endereco_hint"):
-            cats_no_texto.add("residencia")
-
-        # Só bloqueia se não estiver nem nos docs nem no texto
-        cats_cobertas = cats_presentes | cats_no_texto
-        faltando = [_LABELS_CAT[c] for c in obrigatorios if c not in cats_cobertas]
-        ok_polo  = len(faltando) == 0
-
-        resultado["polos"][polo] = {
-            "ok":        ok_polo,
-            "presentes": [_LABELS_CAT.get(c, c) for c in cats_presentes if c in _LABELS_CAT],
-            "no_texto":  [k for k in ["email","telefone","endereco_hint"] if info_ctx.get(k)],
-            "faltando":  faltando,
-        }
-        if not ok_polo:
-            resultado["ok"] = False
-
-    return resultado
-
-
-def gerar_lista_docs_email(docs_classificados, tem_fiador=False):
-    """
-    Gera o bloco de texto com a lista de documentos organizada por polo
-    para incluir no corpo do email.
-    """
-    labels_polo = {
-        "locatario": "LOCATÁRIO",
-        "locador":   "LOCADOR / PROPRIETÁRIO",
-        "fiador":    "FIADOR",
-    }
-    ordem = ["locatario", "locador", "fiador"] if tem_fiador else ["locatario", "locador"]
-    linhas = []
-    for polo in ordem:
-        docs_polo = [d for d in docs_classificados if d["polo"] == polo]
-        if not docs_polo:
-            continue
-        linhas.append(f"📁 {labels_polo.get(polo, polo.upper())}")
-        for d in docs_polo:
-            nome_p = f" — {d['nome_pessoa']}" if d.get("nome_pessoa") else ""
-            linhas.append(f"   • {d['tipo']}{nome_p}")
-        linhas.append("")
-    return "\n".join(linhas).strip()
-
-
 def processar_documentos(arquivos_bytes):
     pdfs_finais = []
     tmp = tempfile.mkdtemp()
@@ -1555,10 +1270,8 @@ def calcular_checklist_locacao(nomes_pdfs, dados=None, imovel=None):
     if imovel:
         if imovel.get("finalidade"): ok.append("✅ Finalidade definida")
         else: faltando.append("❌ Finalidade do imóvel — obrigatória")
-        _modo_s = __import__("streamlit").session_state.get("quiz_modo_servico", "")
-        if _modo_s not in ("email_aluguel", "email_venda"):
-            if imovel.get("area"):   ok.append(f"✅ Área informada ({imovel['area']}m²)")
-            else: faltando.append("❌ Área do imóvel — obrigatória para cláusula")
+        if imovel.get("area"):       ok.append(f"✅ Área informada ({imovel['area']}m²)")
+        else: faltando.append("❌ Área do imóvel — obrigatória para cláusula")
         if imovel.get("fotos"):      ok.append(f"✅ Fotos anexadas ({imovel['fotos']} foto(s))")
         else: ok.append("⚠️ Fotos do imóvel — recomendado para vistoria")
         if imovel.get("vistoria_gerada"): ok.append("✅ Termo de vistoria gerado")
@@ -2212,6 +1925,60 @@ def extrair_dados_locacao(texto_bruto, arquivos_bytes, pdfs_gerados):
     """Mantida para compatibilidade — usa extrair_dados_polo internamente."""
     return extrair_dados_polo(arquivos_bytes, "locatario", texto_bruto)
 
+def parsear_contexto_partes(texto_contexto):
+    """
+    Detecta nomes-chave (locador/proprietario, locatario, fiador) e
+    extrai dados do bloco de texto que vem depois — qualquer formato.
+    """
+    import re
+    if not texto_contexto:
+        return {}
+    CHAVES = [
+        (r'locatári[oa]|locatari[oa]|inquilin[oa]',  "locatario"),
+        (r'locador|proprietári[oa]|proprietari[oa]',  "locador"),
+        (r'fiador|fiadora|garantidor',                "fiador"),
+    ]
+    def _fmt_tel(raw):
+        d = re.sub(r'[^\d]', '', raw)
+        if len(d) == 11: return f"({d[:2]}) {d[2:7]}-{d[7:]}"
+        if len(d) == 10: return f"({d[:2]}) {d[2:6]}-{d[6:]}"
+        return raw.strip()
+    def _fmt_cpf(raw):
+        d = re.sub(r'[^\d]', '', raw)
+        if len(d) == 11: return f"{d[:3]}.{d[3:6]}.{d[6:9]}-{d[9:]}"
+        return raw.strip()
+    def _extrair(bloco):
+        info = {"nome": "", "cpf": "", "email": "", "telefone": "", "endereco_hint": ""}
+        m = re.search(r'[\w.\-+]+@[\w.\-]+\.[a-zA-Z]{2,}', bloco)
+        if m: info["email"] = m.group(0)
+        m = re.search(r'\d{3}[.\s]?\d{3}[.\s]?\d{3}[-\s]?\d{2}', bloco)
+        if m: info["cpf"] = _fmt_cpf(m.group(0))
+        m = re.search(r'\(?\d{2}\)?\s*\d{4,5}[-\s]\d{4}', bloco)
+        if m: info["telefone"] = _fmt_tel(m.group(0))
+        m = re.search(r'(rua|av\.?|avenida|alameda|travessa|estrada)[^\n,]+', bloco, re.IGNORECASE)
+        if m: info["endereco_hint"] = m.group(0).strip()
+        m = re.search(r'nome\s+completo\s*[:\-]\s*([^\n\*]+)', bloco, re.IGNORECASE)
+        if m:
+            info["nome"] = m.group(1).strip()
+        else:
+            pk = '|'.join(p for p, _ in CHAVES)
+            m2 = re.search(rf'(?:{pk})\W+([^,\n\*@\d]+?)(?:\s*,|\s*\n|\s*email|\s*telefone|\s*cpf|$)', bloco, re.IGNORECASE)
+            if m2:
+                nr = m2.group(1).strip().strip(',')
+                if nr and len(nr) > 1: info["nome"] = nr
+        return info
+    pk_all = '|'.join(p for p, _ in CHAVES)
+    matches = list(re.finditer(rf'(?i)(?:^|[\n,\s*])({pk_all})', texto_contexto))
+    resultado = {}
+    for i, m in enumerate(matches):
+        fim   = matches[i+1].start() if i+1 < len(matches) else len(texto_contexto)
+        bloco = texto_contexto[m.start():fim]
+        for padrao, polo in CHAVES:
+            if re.search(padrao, m.group(1), re.IGNORECASE):
+                resultado[polo] = _extrair(bloco)
+                break
+    return resultado
+
 def extrair_dados_polo(arquivos_bytes, polo, texto_bruto=""):
     """Extrai dados de um polo jurídico específico de forma isolada."""
     campos_por_polo = {
@@ -2233,52 +2000,26 @@ def extrair_dados_polo(arquivos_bytes, polo, texto_bruto=""):
     }
     cfg = campos_por_polo.get(polo, campos_por_polo["locatario"])
 
-    # Extrair contexto específico desta pessoa do texto do corretor
-    _ctx_polo = ""
-    if texto_bruto:
-        for linha in texto_bruto.strip().split("\n"):
-            linha_lower = linha.lower().strip()
-            if linha_lower.startswith(polo.lower()) or linha_lower.startswith(polo.lower().replace("locatario","locat")):
-                _ctx_polo = linha.strip()
-                break
-        # fallback: qualquer linha que mencione o polo
-        if not _ctx_polo:
-            for linha in texto_bruto.strip().split("\n"):
-                if polo.lower() in linha.lower():
-                    _ctx_polo = linha.strip()
-                    break
-
-    _ctx_instrucao = ""
-    if _ctx_polo:
-        _ctx_instrucao = f"""
-ÂNCORA DE IDENTIFICAÇÃO (fornecida pelo corretor):
-"{_ctx_polo}"
-
-Use essa âncora para identificar os documentos desta pessoa específica.
-- O nome parcial indicado (ex: "Breno") deve ser usado para encontrar a pessoa nos documentos
-- O e-mail e telefone indicados confirmam que é a pessoa certa
-- O endereço parcial (ex: "Rua Berlim") ajuda a confirmar os documentos de residência
-- Se houver múltiplas pessoas nos documentos, extraia APENAS os dados de quem corresponde a essa âncora
-"""
-    elif texto_bruto:
-        _ctx_instrucao = f"\nCONTEXTO ADICIONAL:\n{texto_bruto}\n"
-
     prompt = f"""Especialista em documentação imobiliária brasileira.
 Você está analisando documentos do {cfg['foco']}.
-Os documentos enviados podem conter arquivos de múltiplas pessoas — locador, locatário e fiador juntos.
-{_ctx_instrucao}
+Podem existir documentos de mais de uma pessoa (ex: titular e cônjuge).
+
 REGRAS DE PRIORIDADE:
-1. Use a ÂNCORA DE IDENTIFICAÇÃO acima para encontrar a pessoa certa nos documentos
-2. Se não houver âncora, extraia dados da pessoa que mais combina com o papel de {cfg['foco']}
-3. "nome_completo" = nome completo do titular desta parte
-4. "cpf" = CPF desta pessoa específica (não de outra parte)
-5. Ignore documentos de outras pessoas que não correspondam à âncora
+1. Se houver documentos de MÚLTIPLAS pessoas, extraia os dados da PRIMEIRA pessoa identificada como titular principal
+2. O titular principal é geralmente quem aparece primeiro, ou quem tem mais documentos
+3. "nome_completo" = nome do titular principal
+4. "cpf" = CPF do titular principal (não do cônjuge)
+5. Se não houver forma de distinguir, extraia o CPF do primeiro documento analisado
+6. "cpf_conjuge" não existe no JSON — ignore cônjuge nos campos principais
 
 REGRA SOBRE CPF:
 - CNH SEMPRE contém CPF — campo visível na frente do documento
 - RG moderno contém CPF no verso
 - Extraia independente do documento onde apareça
 - Formato: XXX.XXX.XXX-XX
+
+TEXTO ADICIONAL:
+{texto_bruto}
 
 RETORNE APENAS JSON válido (sem markdown, sem texto extra):
 {cfg['campos_json']}
@@ -2325,37 +2066,28 @@ RETORNE APENAS JSON válido (sem markdown, sem texto extra):
             digitos = re.sub(r'\D','', str(cpf_raw))
             if len(digitos) == 11:
                 resultado["cpf"] = f"{digitos[:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:]}"
-
-        # ── Merge com dados do contexto (email/telefone/nome têm prioridade) ──
+        # Merge com texto de contexto — email, telefone e CPF do corretor prevalecem
         if texto_bruto:
-            _ctx = parsear_contexto_partes(texto_bruto)
-            _info_polo = _ctx.get(polo, {})
-            # Email do contexto prevalece sempre
-            if _info_polo.get("email"):
-                resultado["email"] = _info_polo["email"]
-            # Telefone do contexto prevalece
-            if _info_polo.get("telefone"):
-                resultado["telefone"] = _info_polo["telefone"]
-            # Nome: se IA não encontrou, usa o do contexto
-            if not resultado.get("nome_completo") and _info_polo.get("nome"):
-                resultado["nome_completo"] = _info_polo["nome"]
-            # CPF do contexto — preenche se IA não encontrou
-            if not resultado.get("cpf") and _info_polo.get("cpf"):
-                resultado["cpf"] = _info_polo["cpf"]
-
+            _ctx  = parsear_contexto_partes(texto_bruto)
+            _info = _ctx.get(polo, {})
+            if _info.get("email"):    resultado["email"]        = _info["email"]
+            if _info.get("telefone"): resultado["telefone"]     = _info["telefone"]
+            if not resultado.get("nome_completo") and _info.get("nome"):
+                resultado["nome_completo"] = _info["nome"]
+            if not resultado.get("cpf") and _info.get("cpf"):
+                resultado["cpf"] = _info["cpf"]
         return resultado
     except Exception as _e:
         import streamlit as _st
         _st.warning(f"⚠️ Falha ao extrair dados do {polo}: {_e}")
-        # Mesmo com erro, tenta retornar email/telefone do contexto
         _fallback = {k: "" for k in cfg['campos']}
         if texto_bruto:
-            _ctx = parsear_contexto_partes(texto_bruto)
+            _ctx  = parsear_contexto_partes(texto_bruto)
             _info = _ctx.get(polo, {})
-            if _info.get("email"):     _fallback["email"]         = _info["email"]
-            if _info.get("telefone"):  _fallback["telefone"]      = _info["telefone"]
-            if _info.get("nome"):      _fallback["nome_completo"] = _info["nome"]
-            if _info.get("cpf"):       _fallback["cpf"]           = _info["cpf"]
+            if _info.get("email"):    _fallback["email"]        = _info["email"]
+            if _info.get("telefone"): _fallback["telefone"]     = _info["telefone"]
+            if _info.get("nome"):     _fallback["nome_completo"]= _info["nome"]
+            if _info.get("cpf"):      _fallback["cpf"]          = _info["cpf"]
         return _fallback
 
 def mini_checklist_polo(dados, polo):
@@ -2403,8 +2135,7 @@ def _bloco_polo_email(titulo, dados):
 
 
 def gerar_email_locacao(dados, pdfs_selecionados, imovel=None,
-                        dados_locador_direto=None, dados_locatario_direto=None, dados_fiador_direto=None,
-                        docs_classificados=None):
+                        dados_locador_direto=None, dados_locatario_direto=None, dados_fiador_direto=None):
     import streamlit as _st
     hora = datetime.now(timezone(timedelta(hours=-3))).hour
     if 6 <= hora < 12:    saud = "Bom dia"
@@ -2417,51 +2148,31 @@ def gerar_email_locacao(dados, pdfs_selecionados, imovel=None,
 
     assunto = f"Documentação para análise de locação — {nome_cliente}"
 
+    # Usa dados passados diretamente (prioridade) ou fallback para session_state
     dados_locatario = dados_locatario_direto if dados_locatario_direto is not None else _st.session_state.get("dados_locatario", dados)
     dados_fiador    = dados_fiador_direto    if dados_fiador_direto    is not None else _st.session_state.get("dados_fiador", {})
     dados_locador   = dados_locador_direto   if dados_locador_direto   is not None else _st.session_state.get("dados_locador", {})
-    tem_fiador      = bool(dados_fiador and dados_fiador.get("nome_completo"))
 
-    tipo_garantia = dados.get("tipo_garantia", _st.session_state.get("quiz_garantia", ""))
+    # Garantia locatícia
+    tipo_garantia = dados.get("tipo_garantia", "")
 
     bloco_locatario = _bloco_polo_email("DADOS DO(A) LOCATÁRIO(A)", dados_locatario)
-    bloco_fiador    = _bloco_polo_email("DADOS DO(A) FIADOR(A)", dados_fiador) if tem_fiador else ""
+    bloco_fiador    = _bloco_polo_email("DADOS DO(A) FIADOR(A)", dados_fiador) if dados_fiador else ""
     bloco_locador   = _bloco_polo_email("DADOS DO(A) PROPRIETÁRIO(A)", dados_locador) if dados_locador else ""
+    bloco_imovel    = gerar_bloco_email_imovel(imovel) if imovel else ""
 
     blocos = [b for b in [bloco_locatario, bloco_fiador, bloco_locador] if b]
     corpo_polos = "\n\n".join(blocos)
 
-    # Bloco de documentos organizados
-    bloco_docs = ""
-    if docs_classificados:
-        lista = gerar_lista_docs_email(docs_classificados, tem_fiador=tem_fiador)
-        if lista:
-            bloco_docs = f"\n\nDOCUMENTOS ANEXADOS\n{lista}"
-
-    # Dados do imóvel
-    bloco_imovel = ""
-    if imovel:
-        bloco_imovel = gerar_bloco_email_imovel(imovel)
-    else:
-        _gar = tipo_garantia or _st.session_state.get("quiz_garantia", "")
-        _end = _st.session_state.get("quiz_endereco_imovel", "")
-        _cid = _st.session_state.get("quiz_end_cidade", "")
-        _uf  = _st.session_state.get("quiz_end_uf", "")
-        _end_full = ", ".join(p for p in [_end, _cid, _uf] if p)
-        linhas_imovel = ["\nDADOS DO IMÓVEL"]
-        if _end_full: linhas_imovel.append(f"* Endereço: {_end_full}")
-        if _gar:      linhas_imovel.append(f"* Garantia locatícia: {_gar}")
-        if len(linhas_imovel) > 1:
-            bloco_imovel = "\n".join(linhas_imovel)
+    garantia_linha = f"\nGarantia locatícia: {tipo_garantia}\n" if tipo_garantia else ""
 
     return f"""Assunto: {assunto}
 
 {saud_txt}
 
 Encaminho a documentação para análise de locação do imóvel.
-
+{garantia_linha}
 {corpo_polos}
-{bloco_docs}
 {bloco_imovel}
 
 Fico no aguardo do parecer.
@@ -2706,155 +2417,113 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-# ── TELA INICIAL — 4 serviços ──────────────────────────────────
-if not st.session_state.get("quiz_modo_servico") \
-   and not st.session_state.get("processado_loc") \
-   and not st.session_state.get("processado"):
-
+# ── SELEÇÃO DE TIPO DE ATENDIMENTO ──
+if "tipo_atendimento" not in st.session_state:
     st.markdown("""
-    <div style='text-align:center;padding:8px 0 24px 0;'>
-        <div style='font-size:11px;font-weight:700;letter-spacing:0.12em;color:#9CA3AF;margin-bottom:6px;'>
-            NOVO ATENDIMENTO
+    <div style='max-width:560px;margin:32px auto 0 auto;background:#ffffff;
+         border-radius:16px;padding:36px 36px 28px 36px;
+         box-shadow:0 4px 20px rgba(0,0,0,0.08);text-align:center;'>
+        <div style='font-size:13px;font-weight:700;color:#1565C0;
+             text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;'>
+            Novo Atendimento
         </div>
-        <div style='font-size:22px;font-weight:800;color:#1A1A2E;margin-bottom:4px;'>
-            O que você precisa fazer?
+        <div style='font-size:20px;font-weight:700;color:#1A1A2E;margin-bottom:6px;'>
+            Qual tipo de atendimento você deseja iniciar?
         </div>
-        <div style='font-size:14px;color:#6B7280;'>
-            Selecione o serviço para iniciar o fluxo
+        <div style='font-size:14px;color:#5C6B7A;margin-bottom:28px;'>
+            Selecione abaixo para carregar o fluxo correto
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── LOCAÇÃO ───────────────────────────────────────────────────
-    st.markdown("""
-    <div style='display:flex;align-items:center;gap:10px;margin:0 0 10px 0;'>
-        <span style='font-size:11px;font-weight:700;letter-spacing:0.1em;color:#6B7280;'>LOCAÇÃO</span>
-        <div style='flex:1;height:1px;background:#E5E7EB;'></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    _c1, _c2 = st.columns(2)
-    with _c1:
-        st.markdown("""
-        <div style='background:white;border:1.5px solid #DBEAFE;border-radius:14px;
-                    padding:20px 20px 14px 20px;margin-bottom:4px;'>
-            <div style='font-size:28px;margin-bottom:8px;'>📧</div>
-            <div style='font-size:15px;font-weight:700;color:#1A1A2E;margin-bottom:2px;'>Enviar Email</div>
-            <div style='font-size:12px;font-weight:700;color:#1565C0;margin-bottom:8px;'>ALUGUEL</div>
-            <div style='font-size:12px;color:#6B7280;line-height:1.5;'>
-                Análise de inquilino · Organiza documentos e monta email profissional
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("Selecionar →", use_container_width=True, key="ini_email_aluguel"):
-            st.session_state["quiz_modo_servico"] = "email_aluguel"
-            st.session_state["tipo_atendimento"]  = "locacao"
-            st.session_state["modo_interface"]    = "quiz"
-            st.session_state["etapa_quiz"]        = 2
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("🏠  Crédito Imobiliário", use_container_width=True, type="primary"):
+            st.session_state["tipo_atendimento"] = "credito"
             st.rerun()
-
-    with _c2:
-        st.markdown("""
-        <div style='background:white;border:1.5px solid #D1FAE5;border-radius:14px;
-                    padding:20px 20px 14px 20px;margin-bottom:4px;'>
-            <div style='font-size:28px;margin-bottom:8px;'>📄</div>
-            <div style='font-size:15px;font-weight:700;color:#1A1A2E;margin-bottom:2px;'>Gerar Contrato</div>
-            <div style='font-size:12px;font-weight:700;color:#2E7D32;margin-bottom:8px;'>ALUGUEL</div>
-            <div style='font-size:12px;color:#6B7280;line-height:1.5;'>
-                Contrato completo com cláusulas, termo de vistoria e condições financeiras
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("Selecionar →", use_container_width=True, key="ini_contrato_aluguel"):
-            st.session_state["quiz_modo_servico"] = "contrato_aluguel"
-            st.session_state["tipo_atendimento"]  = "locacao"
-            st.session_state["modo_interface"]    = "quiz"
-            st.session_state["etapa_quiz"]        = 2
+        st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Venda · Financiamento · FGTS</div>", unsafe_allow_html=True)
+    with col_b:
+        if st.button("🔑  Locação", use_container_width=True):
+            st.session_state["tipo_atendimento"] = "locacao"
             st.rerun()
+        st.markdown("<div style='text-align:center;font-size:12px;color:#5C6B7A;margin-top:6px;'>Aluguel · Análise de Inquilino</div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-
-    # ── VENDA / FINANCIAMENTO ─────────────────────────────────────
-    st.markdown("""
-    <div style='display:flex;align-items:center;gap:10px;margin:0 0 10px 0;'>
-        <span style='font-size:11px;font-weight:700;letter-spacing:0.1em;color:#6B7280;'>VENDA / FINANCIAMENTO</span>
-        <div style='flex:1;height:1px;background:#E5E7EB;'></div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    _c3, _c4 = st.columns(2)
-    with _c3:
-        st.markdown("""
-        <div style='background:white;border:1.5px solid #FEF3C7;border-radius:14px;
-                    padding:20px 20px 14px 20px;margin-bottom:4px;'>
-            <div style='font-size:28px;margin-bottom:8px;'>📧</div>
-            <div style='font-size:15px;font-weight:700;color:#1A1A2E;margin-bottom:2px;'>Enviar Email</div>
-            <div style='font-size:12px;font-weight:700;color:#B45309;margin-bottom:8px;'>VENDA</div>
-            <div style='font-size:12px;color:#6B7280;line-height:1.5;'>
-                Organização de documentos · Email para correspondente bancário
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("Selecionar →", use_container_width=True, key="ini_email_venda"):
-            st.session_state["quiz_modo_servico"] = "email_venda"
-            st.session_state["tipo_atendimento"]  = "credito"
-            st.session_state["modo_interface"]    = "quiz"
-            st.session_state["etapa_quiz"]        = 2
-            st.rerun()
-
-    with _c4:
-        st.markdown("""
-        <div style='background:white;border:1.5px solid #EDE9FE;border-radius:14px;
-                    padding:20px 20px 14px 20px;margin-bottom:4px;'>
-            <div style='font-size:28px;margin-bottom:8px;'>📄</div>
-            <div style='font-size:15px;font-weight:700;color:#1A1A2E;margin-bottom:2px;'>Gerar Contrato</div>
-            <div style='font-size:12px;font-weight:700;color:#6D28D9;margin-bottom:8px;'>VENDA</div>
-            <div style='font-size:12px;color:#6B7280;line-height:1.5;'>
-                Contrato de compra e venda completo com todas as cláusulas jurídicas
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button("Selecionar →", use_container_width=True, key="ini_contrato_venda"):
-            st.session_state["quiz_modo_servico"] = "contrato_venda"
-            st.session_state["tipo_atendimento"]  = "credito"
-            st.session_state["modo_interface"]    = "quiz"
-            st.session_state["etapa_quiz"]        = 2
-            st.rerun()
-
-    # ── Histórico de Atendimentos ─────────────────────────────────
+    # ── Histórico de Atendimentos ──
     _cli_hist = st.session_state.get("cliente", {})
     if _cli_hist.get("id"):
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         st.divider()
-        with st.expander("📋 Histórico de Atendimentos", expanded=False):
+        with st.expander("📋 Histórico de Atendimentos", expanded=True):
             _hist = buscar_historico(_cli_hist["id"], limite=30)
             if _hist:
                 _cores_tipo  = {"Locação":"#2E7D32","Crédito Imobiliário":"#1565C0"}
+                _cores_score = {"BAIXO":"#2E7D32","MÉDIO":"#E65100","ALTO":"#C62828"}
+                _cores_status = {
+                    "Em andamento": "#E65100",
+                    "Contrato Gerado": "#1565C0",
+                    "Email Enviado": "#2E7D32",
+                    "Finalizado": "#555",
+                }
                 for _h in _hist:
                     _tipo_h    = _h.get("tipo","?")
                     _cor_h     = _cores_tipo.get(_tipo_h,"#555")
                     _nome_loct = _h.get("nome_locatario","") or "—"
+                    _nome_loc  = _h.get("nome_locador","")  or "—"
                     _data_h    = _h.get("criado_em","")[:10]
                     _hora_h    = _h.get("criado_em","")[11:16]
-                    st.markdown(
-                        f"<div style='display:flex;justify-content:space-between;align-items:center;"
-                        f"padding:8px 12px;border-radius:8px;border:1px solid #E5E7EB;margin-bottom:6px;'>"
-                        f"<div><span style='background:{_cor_h};color:white;font-size:10px;font-weight:700;"
-                        f"padding:2px 8px;border-radius:10px;margin-right:8px;'>{_tipo_h}</span>"
-                        f"<span style='font-size:13px;color:#1A1A2E;'>{_nome_loct}</span></div>"
-                        f"<span style='font-size:11px;color:#9CA3AF;'>{_data_h} {_hora_h}</span></div>",
-                        unsafe_allow_html=True
-                    )
-            else:
-                st.caption("Nenhum atendimento registrado ainda.")
+                    _status_h  = _h.get("status","?")
+                    _cor_st    = _cores_status.get(_status_h,"#888")
+                    _end_h     = _h.get("endereco_imovel","")
+                    _val_h     = _h.get("valor_aluguel","")
+                    _score_h   = _h.get("score_risco")
+                    _cont_h    = _h.get("contrato_gerado", False)
+                    _email_h   = _h.get("email_enviado",  False)
 
+                    # badges contrato e email
+                    _badge_cont  = "<span style='background:#1565C0;color:white;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:4px;'>📄 Contrato</span>" if _cont_h else ""
+                    _badge_email = "<span style='background:#2E7D32;color:white;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:4px;'>📧 Email enviado</span>" if _email_h else ""
+
+                    # score
+                    _score_txt = ""
+                    if _score_h is not None:
+                        _nivel_h = "BAIXO" if _score_h >= 70 else ("MÉDIO" if _score_h >= 40 else "ALTO")
+                        _cor_sh  = _cores_score[_nivel_h]
+                        _score_txt = f"<span style='color:{_cor_sh};font-weight:700;font-size:11px;'>● {_nivel_h} ({_score_h}/100)</span> &nbsp;"
+
+                    # linha de detalhes
+                    _detalhes = []
+                    if _end_h:  _detalhes.append(f"🏠 {_end_h}")
+                    if _val_h:  _detalhes.append(f"R$ {_val_h}")
+                    _det_txt = " &nbsp;·&nbsp; ".join(_detalhes)
+
+                    st.markdown(
+                        f"<div style='border-left:3px solid {_cor_h};padding:10px 14px;"
+                        f"margin-bottom:8px;border-radius:0 8px 8px 0;background:#FAFAFA;'>"
+                        f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+                        f"<span style='font-size:12px;font-weight:700;color:{_cor_h};'>{_tipo_h}</span>"
+                        f"<span style='font-size:10px;color:#888;'>{_data_h} {_hora_h}</span>"
+                        f"</div>"
+                        f"<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:3px 0 2px 0;'>"
+                        f"🔑 {_nome_loct} &nbsp;<span style='font-size:11px;color:#5C6B7A;font-weight:400;'>"
+                        f"(Loc: {_nome_loc})</span></div>"
+                        f"<div style='font-size:11px;color:#5C6B7A;margin-bottom:4px;'>{_det_txt}</div>"
+                        f"<div style='display:flex;align-items:center;gap:4px;flex-wrap:wrap;'>"
+                        f"{_score_txt}"
+                        f"<span style='font-size:10px;font-weight:700;color:{_cor_st};'>{_status_h}</span>"
+                        f"{_badge_cont}{_badge_email}"
+                        f"</div></div>",
+                        unsafe_allow_html=True)
+            else:
+                st.caption("Nenhum atendimento registrado ainda — processe o primeiro para começar.")
+
+    # ── Barra de conta (tela inicial) ──
     st.divider()
-    _bc1, _bc2, _bc3 = st.columns(3)
-    with _bc1:
+    _bi_e, _bi_cfg, _bi_sup, _bi_out = st.columns([1, 2, 2, 2])
+
+    with _bi_cfg:
         with st.popover("⚙️ Configurar Email", use_container_width=True):
             st.caption("**Configuração de envio de email**")
             _cfg_d = st.text_input("📧 Email destino",         value=st.session_state.get("cfg_destino",""),   placeholder="destinatario@email.com", key="cfg_d_home")
-            _cfg_r = st.text_input("📤 Seu Gmail (remetente)", value=st.session_state.get("cfg_remetente",""), placeholder="seuemail@gmail.com",      key="cfg_r_home")
+            _cfg_r = st.text_input("📤 Seu Gmail (remetente)", value=st.session_state.get("cfg_remetente",""), placeholder="seuemail@gmail.com",     key="cfg_r_home")
             _cfg_s = st.text_input("🔑 Senha de app Gmail",    value=st.session_state.get("cfg_senha",""),     type="password", placeholder="Senha de app Google", key="cfg_s_home")
             st.caption("💡 myaccount.google.com → Segurança → Senhas de app")
             if st.button("💾 Salvar", use_container_width=True, key="salvar_cfg_home"):
@@ -2862,18 +2531,50 @@ if not st.session_state.get("quiz_modo_servico") \
                 st.session_state["cfg_remetente"] = _cfg_r
                 st.session_state["cfg_senha"]     = _cfg_s
                 st.success("✅ Salvo!")
-    with _bc2:
+
+    with _bi_sup:
         with st.popover("🔧 Suporte Técnico", use_container_width=True):
-            st.caption("Entre em contato com o suporte.")
-    with _bc3:
+            st.caption("**Diagnóstico técnico**")
+            st.caption("Baixe e envie ao suporte.")
+            import sys, platform
+            from datetime import datetime as _dth
+            _diag = [
+                "=" * 60,
+                "RELATÓRIO DE DIAGNÓSTICO — ImobFlow",
+                f"Gerado em: {_dth.now().strftime('%d/%m/%Y %H:%M:%S')}",
+                "=" * 60,
+                "\n[ AMBIENTE ]",
+                f"Python: {sys.version.split()[0]}",
+                f"Plataforma: {platform.system()} {platform.release()}",
+            ]
+            try:
+                import streamlit as _st2; _diag.append(f"Streamlit: {_st2.__version__}")
+            except: pass
+            _cli_d = st.session_state.get("cliente", {})
+            _diag += [
+                "\n[ CLIENTE ]",
+                f"Login: {_cli_d.get('login','?')} | Plano: {_cli_d.get('plano','free')}",
+                f"Vencimento: {_cli_d.get('data_vencimento','?')}",
+                "\n[ ERROS ]",
+            ]
+            _errs = st.session_state.get("erros_sistema", [])
+            for _er in _errs: _diag.append(f"  ⚠ {_er}")
+            if not _errs: _diag.append("(nenhum)")
+            _diag.append("\n" + "=" * 60)
+            st.download_button("⬇️ Baixar .txt", data="\n".join(_diag).encode("utf-8"),
+                file_name=f"diag_{_dth.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain", use_container_width=True, key="dl_diag_home")
+
+    with _bi_out:
         if st.button("🚪 Sair da conta", use_container_width=True, key="sair_home"):
-            for _k in list(st.session_state.keys()):
+            for _k in ["autenticado","cliente","cfg_destino","cfg_remetente","cfg_senha",
+                       "pdfs_gerados","email_gerado","processado","dados",
+                       "pdfs_gerados_loc","email_gerado_loc","processado_loc","dados_loc","tipo_atendimento"]:
                 st.session_state.pop(_k, None)
             st.query_params.clear()
             st.rerun()
 
     st.stop()
-
 
 # ══════════════════════════════════════════════════════════════════
 # MODO ASSISTENTE (QUIZ) — camada de interface acima da lógica atual
@@ -2917,427 +2618,381 @@ def _quiz_voltar(etapa_anterior):
 
 # ── ETAPA 1 — Tipo de serviço ──────────────────────────────────────
 def quiz_etapa_1():
-    """Etapa 1 — O que o corretor quer fazer."""
     with st.container():
         _quiz_card_inicio(
-            "O que você precisa fazer?",
-            "Escolha o tipo de serviço para começar",
-            etapa=1, total=4
+            "O que você deseja fazer?",
+            "Escolha o tipo de atendimento para começar",
+            etapa=1, total=6
         )
-
-        # Linha 1: Aluguel
-        st.markdown("<div style='font-size:12px;font-weight:700;color:#6B7280;letter-spacing:0.05em;margin:8px 0 6px 0;'>LOCAÇÃO</div>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("📧  Enviar Email — Aluguel", use_container_width=True, key="q_email_aluguel"):
-                st.session_state["quiz_modo_servico"] = "email_aluguel"
-                st.session_state["tipo_atendimento"]  = "locacao"
-                st.session_state["etapa_quiz"] = 2
-                st.rerun()
-            st.caption("Análise de inquilino · Email profissional organizado")
+            st.markdown("<div class='quiz-opcao-btn'>", unsafe_allow_html=True)
+            if st.button("🏦 Financiamento Imobiliário", use_container_width=True, key="quiz_credito"):
+                st.session_state["quiz_tipo_servico"] = "credito"
+                st.session_state["tipo_atendimento"]  = "credito"
+                st.session_state["etapa_quiz"] = 10  # pula direto ao painel
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.caption("Crédito · Financiamento · FGTS")
         with col2:
-            if st.button("📄  Gerar Contrato — Aluguel", use_container_width=True, key="q_contrato_aluguel"):
-                st.session_state["quiz_modo_servico"] = "contrato_aluguel"
+            st.markdown("<div class='quiz-opcao-btn'>", unsafe_allow_html=True)
+            if st.button("🏠 Contrato de Locação", use_container_width=True, key="quiz_locacao"):
+                st.session_state["quiz_tipo_servico"] = "locacao"
                 st.session_state["tipo_atendimento"]  = "locacao"
                 st.session_state["etapa_quiz"] = 2
-                st.rerun()
-            st.caption("Contrato completo com cláusulas e termo de vistoria")
-
-        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-
-        # Linha 2: Venda
-        st.markdown("<div style='font-size:12px;font-weight:700;color:#6B7280;letter-spacing:0.05em;margin:8px 0 6px 0;'>VENDA / FINANCIAMENTO</div>", unsafe_allow_html=True)
-        col3, col4 = st.columns(2)
-        with col3:
-            if st.button("📧  Enviar Email — Venda", use_container_width=True, key="q_email_venda"):
-                st.session_state["quiz_modo_servico"] = "email_venda"
-                st.session_state["tipo_atendimento"]  = "credito"
-                st.session_state["etapa_quiz"] = 2
-                st.rerun()
-            st.caption("Organização de docs · Email para correspondente")
-        with col4:
-            if st.button("📄  Gerar Contrato — Venda", use_container_width=True, key="q_contrato_venda"):
-                st.session_state["quiz_modo_servico"] = "contrato_venda"
-                st.session_state["tipo_atendimento"]  = "credito"
-                st.session_state["etapa_quiz"] = 2
-                st.rerun()
-            st.caption("Contrato de compra e venda completo")
+            st.markdown("</div>", unsafe_allow_html=True)
+            st.caption("Aluguel · Análise de Inquilino")
+        if st.session_state.get("etapa_quiz", 1) in (2, 10):
+            st.rerun()
 
 
-# ── ETAPA 2 — Tipo de imóvel (residencial/comercial) ─────────────
+# ── ETAPA 2 — Tipo de imóvel ──────────────────────────────────────
 def quiz_etapa_2():
-    """Etapa 2 — Tipo do imóvel."""
-    modo = st.session_state.get("quiz_modo_servico", "email_aluguel")
-    _e_contrato = "contrato" in modo
-    total_etapas = 5 if _e_contrato else 4
-
     with st.container():
         _quiz_card_inicio(
             "Qual o tipo do imóvel?",
-            "Residencial ou comercial — define o fluxo e as cláusulas",
-            etapa=2, total=total_etapas
+            "Residencial ou comercial — define as cláusulas do contrato",
+            etapa=2, total=6
         )
         col1, col2 = st.columns(2)
         with col1:
+            st.markdown("<div class='quiz-opcao-btn'>", unsafe_allow_html=True)
             if st.button("🏠  Residencial", use_container_width=True, key="quiz_res"):
                 st.session_state["finalidade_imovel"] = "Residencial"
                 st.session_state["etapa_quiz"] = 3
                 st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
             st.caption("Casa, apartamento, kitnet...")
         with col2:
+            st.markdown("<div class='quiz-opcao-btn'>", unsafe_allow_html=True)
             if st.button("🏢  Comercial", use_container_width=True, key="quiz_com"):
                 st.session_state["finalidade_imovel"] = "Comercial"
                 st.session_state["etapa_quiz"] = 3
                 st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
             st.caption("Sala, loja, galpão...")
-
     _quiz_voltar(1)
 
 
-# ── ETAPA 3 — Partes + docs + garantia (igual para email e contrato) ──
+# ── ETAPA 3 — Garantia ────────────────────────────────────────────
 def quiz_etapa_3():
-    """Etapa 3 — Contexto WhatsApp + upload único + garantia."""
-    modo = st.session_state.get("quiz_modo_servico", "email_aluguel")
-    _e_aluguel = "aluguel" in modo
-    _e_contrato = "contrato" in modo
-    total_etapas = 5 if _e_contrato else 4
-
     with st.container():
         _quiz_card_inicio(
-            "Partes envolvidas + documentos",
-            "Cole o resumo do WhatsApp e envie todos os arquivos de uma vez",
-            etapa=3, total=total_etapas
+            "Qual o tipo de garantia?",
+            "Isso define quais documentos serão necessários",
+            etapa=3, total=6
         )
-
-        # ── Instrução ─────────────────────────────────────────────
-        st.markdown(
-            "<div style='background:#F0F7FF;border-left:3px solid #1565C0;border-radius:8px;"
-            "padding:12px 14px;margin-bottom:12px;'>"
-            "<div style='font-weight:700;color:#1565C0;font-size:13px;margin-bottom:8px;'>"
-            "💬 Cole aqui o resumo das partes (do WhatsApp ou anotação)"
-            "</div>"
-            "<div style='color:#374151;font-size:12px;line-height:1.9;'>"
-            "Escreva uma linha por pessoa com o papel dela:<br>"
-            "<code style='background:#DBEAFE;padding:1px 6px;border-radius:3px;font-size:11px;'>"
-            "locatario, Breno, email breno@gmail.com, telefone 81 99450-5765, Rua Berlim</code><br>"
-            "<code style='background:#DBEAFE;padding:1px 6px;border-radius:3px;font-size:11px;'>"
-            "locador, Annaic, email annaic@gmail.com, telefone 81 99798-932, Rua Padre José</code><br>"
-            "<code style='background:#FEF3C7;padding:1px 6px;border-radius:3px;font-size:11px;'>"
-            "fiador, José, email jose@gmail.com, telefone 81 98960-9411, Rua Joaquim</code>"
-            " <span style='color:#9CA3AF;font-size:11px;'>(só se houver fiador)</span>"
-            "</div></div>",
-            unsafe_allow_html=True
-        )
-
-        texto_contexto = st.text_area(
-            "Contexto",
-            value=st.session_state.get("quiz_texto_contexto", ""),
-            placeholder=(
-                "locatario, Nome, email ..., telefone ..., Rua ...\n"
-                "locador, Nome, email ..., telefone ..., Rua ...\n"
-                "fiador, Nome, email ..., telefone ..., Rua ...  (se houver)"
-            ),
-            height=115,
-            key="quiz_texto_contexto_input",
-            label_visibility="collapsed"
-        )
-        if texto_contexto:
-            st.session_state["quiz_texto_contexto"] = texto_contexto
-
-        # ── Garantia (só aluguel) ─────────────────────────────────
-        if _e_aluguel:
-            st.markdown(
-                "<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 4px 0;'>"
-                "🔒 Tipo de garantia <span style='color:#E53E3E;'>*</span></div>",
-                unsafe_allow_html=True
-            )
-            garantia_atual = st.session_state.get("quiz_garantia", "")
-            garantias_opcoes = [
-                ("🤝","Fiador","Fiador"),
-                ("💰","Caução","Caução em dinheiro"),
-                ("🛡️","Seguro-Fiança","Seguro-Fiança"),
-                ("📄","Título Cap.","Título de Capitalização"),
-                ("🏠","Caução Real","Caução de Bens (Real)"),
-            ]
-            cols_g = st.columns(len(garantias_opcoes))
-            for i, (em, label, val) in enumerate(garantias_opcoes):
-                with cols_g[i]:
-                    if st.button(
-                        f"{em} {label}",
-                        use_container_width=True,
-                        type="primary" if garantia_atual == val else "secondary",
-                        key=f"quiz_g_{i}"
-                    ):
-                        st.session_state["quiz_garantia"]   = val
-                        st.session_state["quiz_tem_fiador"] = (val == "Fiador")
-                        st.rerun()
-            # Auto-detectar fiador pelo texto
-            _txt = texto_contexto or st.session_state.get("quiz_texto_contexto","")
-            if "fiador" in _txt.lower() and garantia_atual != "Fiador":
-                st.session_state["quiz_garantia"]   = "Fiador"
-                st.session_state["quiz_tem_fiador"] = True
-            if not garantia_atual:
-                st.warning("⚠️ Selecione o tipo de garantia para continuar")
-
-        # ── Upload único ──────────────────────────────────────────
-        st.markdown(
-            "<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 2px 0;'>"
-            "📎 Envie todos os documentos de uma vez</div>"
-            "<div style='font-size:12px;color:#6B7280;margin-bottom:6px;'>"
-            "RG · CNH · CPF · Comprovantes — todas as partes juntas</div>",
-            unsafe_allow_html=True
-        )
-        todos_docs = st.file_uploader(
-            "Documentos",
-            accept_multiple_files=True,
-            type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
-            key="quiz_todos_docs",
-            label_visibility="collapsed"
-        )
-        if todos_docs:
-            salvos = []
-            for a in todos_docs:
-                try:
-                    conteudo = a.read(); a.seek(0)
-                    salvos.append({"name": a.name, "bytes": conteudo})
-                except: pass
-            st.session_state["quiz_todos_docs_bytes"] = salvos
-            st.success(f"✅ {len(todos_docs)} arquivo(s) — a IA vai separar por pessoa usando o contexto acima")
-
-        # ── Validação ─────────────────────────────────────────────
-        _tem_docs     = bool(todos_docs or st.session_state.get("quiz_todos_docs_bytes"))
-        _tem_contexto = bool(texto_contexto or st.session_state.get("quiz_texto_contexto"))
-        _tem_garantia = bool(st.session_state.get("quiz_garantia")) if _e_aluguel else True
-        tudo_ok = _tem_contexto and _tem_docs and _tem_garantia
-
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        if st.button(
-            "Próximo →" if tudo_ok else "⚠️ Preencha os campos obrigatórios",
-            use_container_width=True,
-            type="primary" if tudo_ok else "secondary",
-            key="quiz_prox_3",
-            disabled=not tudo_ok
-        ):
-            # Email → vai direto p/ revisão (etapa 4)
-            # Contrato → vai para detalhes do imóvel (etapa 40 = intermediária)
-            st.session_state["etapa_quiz"] = 40 if _e_contrato else 4
-            st.rerun()
-
+        garantias = [
+            ("🤝", "Fiador",                 "fiador"),
+            ("💰", "Caução",                 "caucao"),
+            ("🛡️", "Seguro Fiança",          "seguro_fianca"),
+            ("📄", "Título de Capitalização","titulo_capitalizacao"),
+        ]
+        for emoji, label, valor in garantias:
+            if st.button(f"{emoji}  {label}", use_container_width=True, key=f"quiz_gar_{valor}"):
+                st.session_state["quiz_garantia"]  = valor
+                st.session_state["quiz_tem_fiador"] = (valor == "fiador")
+                # Sincronizar com o campo do sistema atual
+                if valor == "fiador":
+                    st.session_state["tem_fiador_check"] = True
+                st.session_state["etapa_quiz"] = 4
+                st.rerun()
     _quiz_voltar(2)
 
 
-# ── ETAPA 40 — Detalhes do imóvel (SÓ CONTRATO) ──────────────────
-def quiz_etapa_40():
-    """Etapa adicional apenas para geração de contrato — dados do imóvel."""
+# ── ETAPA 4 — Upload de documentos ───────────────────────────────
+def quiz_etapa_4():
+    tem_fiador_quiz = st.session_state.get("quiz_tem_fiador", False)
+    total_etapas    = 6 if tem_fiador_quiz else 6
+
+    with st.container():
+        _quiz_card_inicio(
+            "Envie os documentos das partes",
+            "Carregue os arquivos — a IA identifica e organiza automaticamente",
+            etapa=4, total=6
+        )
+
+        # LOCADOR
+        with st.container(border=True):
+            st.markdown("""
+            <div style='display:flex;align-items:center;gap:8px;margin-bottom:6px;'>
+                <span style='background:#1565C0;color:white;font-size:11px;font-weight:700;
+                    padding:2px 9px;border-radius:12px;'>LOCADOR</span>
+                <span style='font-size:14px;font-weight:600;color:#1A1A2E;'>🧑‍💼 Proprietário</span>
+            </div>
+            <div style='font-size:12px;color:#6B7280;margin-bottom:6px;'>
+                RG/CNH · CPF · Comprovante de estado civil · Comprovante de endereço
+            </div>
+            """, unsafe_allow_html=True)
+            st.file_uploader(
+                "Documentos do Locador",
+                accept_multiple_files=True,
+                type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
+                key="upload_locador",
+                label_visibility="collapsed"
+            )
+            col_e, col_t = st.columns(2)
+            with col_e: st.text_input("📧 E-mail do Locador", placeholder="locador@email.com", key="email_manual_locador")
+            with col_t: st.text_input("📱 WhatsApp/Tel", placeholder="(81) 99999-0000", key="tel_manual_locador")
+
+        # LOCATÁRIO
+        with st.container(border=True):
+            st.markdown("""
+            <div style='display:flex;align-items:center;gap:8px;margin-bottom:6px;'>
+                <span style='background:#2E7D32;color:white;font-size:11px;font-weight:700;
+                    padding:2px 9px;border-radius:12px;'>LOCATÁRIO</span>
+                <span style='font-size:14px;font-weight:600;color:#1A1A2E;'>🔑 Inquilino</span>
+            </div>
+            <div style='font-size:12px;color:#6B7280;margin-bottom:6px;'>
+                RG/CNH · CPF · Comprovante de renda · Comprovante de residência
+            </div>
+            """, unsafe_allow_html=True)
+            st.file_uploader(
+                "Documentos do Locatário",
+                accept_multiple_files=True,
+                type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
+                key="upload_locatario",
+                label_visibility="collapsed"
+            )
+            col_e2, col_t2 = st.columns(2)
+            with col_e2: st.text_input("📧 E-mail do Locatário", placeholder="locatario@email.com", key="email_manual_locatario")
+            with col_t2: st.text_input("📱 WhatsApp/Tel", placeholder="(81) 99999-0000", key="tel_manual_locatario")
+
+        # FIADOR — condicional
+        if tem_fiador_quiz:
+            with st.container(border=True):
+                st.markdown("""
+                <div style='display:flex;align-items:center;gap:8px;margin-bottom:6px;'>
+                    <span style='background:#E65100;color:white;font-size:11px;font-weight:700;
+                        padding:2px 9px;border-radius:12px;'>FIADOR</span>
+                    <span style='font-size:14px;font-weight:600;color:#1A1A2E;'>🤝 Garantidor</span>
+                </div>
+                <div style='font-size:12px;color:#6B7280;margin-bottom:6px;'>
+                    RG/CNH · CPF · Comprovante de renda · Residência · Imóvel próprio
+                </div>
+                """, unsafe_allow_html=True)
+                st.file_uploader(
+                    "Documentos do Fiador",
+                    accept_multiple_files=True,
+                    type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
+                    key="upload_fiador",
+                    label_visibility="collapsed"
+                )
+                col_e3, col_t3 = st.columns(2)
+                with col_e3: st.text_input("📧 E-mail do Fiador", placeholder="fiador@email.com", key="email_manual_fiador")
+                with col_t3: st.text_input("📱 WhatsApp/Tel", placeholder="(81) 99999-0000", key="tel_manual_fiador")
+
+        # Validação antes de avançar
+        upload_loc  = st.session_state.get("upload_locador",  [])
+        upload_loct = st.session_state.get("upload_locatario", [])
+        upload_fiad = st.session_state.get("upload_fiador",   [])
+
+        tudo_ok = (
+            bool(st.session_state.get("upload_locador"))
+            and bool(st.session_state.get("upload_locatario"))
+            and (not tem_fiador_quiz or bool(st.session_state.get("upload_fiador")))
+        )
+
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        btn_prox = st.button(
+            "Próximo →" if tudo_ok else "⚠️ Envie os documentos para continuar",
+            use_container_width=True,
+            type="primary" if tudo_ok else "secondary",
+            key="quiz_prox_4",
+            disabled=not tudo_ok
+        )
+        if btn_prox:
+            st.session_state["etapa_quiz"] = 5
+            st.rerun()
+
+    _quiz_voltar(3)
+
+
+# ── ETAPA 5 — Detalhes do imóvel ──────────────────────────────────
+def quiz_etapa_5():
     finalidade = st.session_state.get("finalidade_imovel", "Residencial")
-    modo = st.session_state.get("quiz_modo_servico", "contrato_aluguel")
-    total_etapas = 5
 
     with st.container():
         _quiz_card_inicio(
             "Detalhes do imóvel",
             "Informações usadas para gerar o contrato e o termo de vistoria",
-            etapa=4, total=total_etapas
+            etapa=5, total=6
         )
 
+        # Matrícula
         col_mat, _ = st.columns(2)
         with col_mat:
-            st.text_input("Matrícula do imóvel (opcional)", placeholder="Ex: 12.345", key="q_mat_imovel")
+            st.text_input("Matrícula do imóvel (opcional)", placeholder="Ex: 12.345", key="mat_imovel")
 
+        # Endereço do imóvel
         st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:10px 0 6px 0;'>📍 Endereço do imóvel</div>", unsafe_allow_html=True)
-        col_e1, col_e2 = st.columns([3,1])
-        with col_e1: st.text_input("Rua / Avenida", placeholder="Ex: Rua das Flores, 123", key="quiz_end_rua")
-        with col_e2: st.text_input("Nº / Apto", placeholder="123", key="quiz_end_num")
-        col_b, col_c, col_u = st.columns([2,2,1])
-        with col_b: st.text_input("Bairro", placeholder="Ex: Boa Viagem", key="quiz_end_bairro")
-        with col_c: st.text_input("Cidade", placeholder="Ex: Recife", key="quiz_end_cidade")
-        with col_u: st.text_input("UF", placeholder="PE", max_chars=2, key="quiz_end_uf")
+        col_end1, col_end2 = st.columns([3, 1])
+        with col_end1: st.text_input("Rua / Avenida", placeholder="Ex: Rua das Flores, 123", key="quiz_end_rua")
+        with col_end2: st.text_input("Nº / Apto", placeholder="123", key="quiz_end_num")
+        col_bairro, col_cidade, col_uf = st.columns([2, 2, 1])
+        with col_bairro: st.text_input("Bairro", placeholder="Ex: Boa Viagem", key="quiz_end_bairro")
+        with col_cidade: st.text_input("Cidade", placeholder="Ex: Recife", key="quiz_end_cidade")
+        with col_uf:     st.text_input("UF", placeholder="PE", max_chars=2, key="quiz_end_uf")
 
+        # Campos por finalidade — reutilizando as mesmas keys do painel
         if finalidade == "Residencial":
             st.markdown("<div style='background:#F0F7F0;border-radius:8px;padding:14px;margin-top:10px;'>", unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            with c1: st.selectbox("Tipo", ["Casa","Apartamento","Kitnet","Cobertura","Studio","Sobrado","Flat"], key="q_tipo_res")
-            with c2: st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="q_area_res")
-            c3,c4,c5,c6 = st.columns(4)
-            with c3: st.number_input("Quartos",   min_value=0, step=1, key="q_quartos_r")
-            with c4: st.number_input("Suítes",    min_value=0, step=1, key="q_suites_r")
-            with c5: st.number_input("Banheiros", min_value=0, step=1, key="q_banhos_r")
-            with c6: st.number_input("Salas",     min_value=0, step=1, key="q_salas_r")
-            c7, c8 = st.columns(2)
-            with c7: st.number_input("Vagas", min_value=0, step=1, key="q_vagas_r")
-            with c8: st.selectbox("Mobiliado", ["Não","Parcial","Total"], key="q_mob_r")
+            col_ti, col_area = st.columns(2)
+            with col_ti:   st.selectbox("Tipo de imóvel", ["Casa","Apartamento","Kitnet","Cobertura","Studio","Sobrado","Flat"], key="tipo_res")
+            with col_area: st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="area_res")
+            col_q, col_s, col_b, col_sal = st.columns(4)
+            with col_q:   st.number_input("Quartos",   min_value=0, step=1, key="quartos_r")
+            with col_s:   st.number_input("Suítes",    min_value=0, step=1, key="suites_r")
+            with col_b:   st.number_input("Banheiros", min_value=0, step=1, key="banhos_r")
+            with col_sal: st.number_input("Salas",     min_value=0, step=1, key="salas_r")
+            col_v, col_mob = st.columns(2)
+            with col_v:   st.number_input("Vagas", min_value=0, step=1, key="vagas_r")
+            with col_mob: st.selectbox("Mobiliado", ["Não","Parcial","Total"], key="mob_r")
             st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.markdown("<div style='background:#F0F4FF;border-radius:8px;padding:14px;margin-top:10px;'>", unsafe_allow_html=True)
-            c1, c2 = st.columns(2)
-            with c1: st.selectbox("Tipo", ["Sala comercial","Loja","Galpão","Consultório","Coworking","Pavilhão","Conjunto comercial"], key="q_tipo_com")
-            with c2: st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="q_area_com")
-            c3,c4,c5 = st.columns(3)
-            with c3: st.number_input("Salas internas", min_value=0, step=1, key="q_salas_c")
-            with c4: st.number_input("Banheiros",      min_value=0, step=1, key="q_banhos_c")
-            with c5: st.number_input("Vagas",          min_value=0, step=1, key="q_vagas_c")
-            st.text_input("Atividade permitida", placeholder="Ex: Comércio varejista", key="q_ativ_c")
+            col_tc, col_areac = st.columns(2)
+            with col_tc:    st.selectbox("Tipo", ["Sala comercial","Loja","Galpão","Consultório","Coworking","Pavilhão","Conjunto comercial"], key="tipo_com")
+            with col_areac: st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="area_com")
+            col_sc, col_bc, col_vc = st.columns(3)
+            with col_sc: st.number_input("Salas internas", min_value=0, step=1, key="salas_c")
+            with col_bc: st.number_input("Banheiros",      min_value=0, step=1, key="banhos_c")
+            with col_vc: st.number_input("Vagas",          min_value=0, step=1, key="vagas_c")
+            st.text_input("Atividade permitida", placeholder="Ex: Comércio varejista", key="ativ_c")
             st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 6px 0;'>📷 Fotos do imóvel <span style='font-weight:400;color:#9CA3AF;font-size:12px;'>(opcional)</span></div>", unsafe_allow_html=True)
-        st.file_uploader("Fotos", accept_multiple_files=True, type=["jpg","jpeg","png","webp","bmp"], key="q_fotos_imovel", label_visibility="collapsed")
+        # Fotos
+        st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 6px 0;'>📷 Fotos do imóvel <span style='font-weight:400;color:#9CA3AF;font-size:12px;'>(opcional — gera termo de vistoria)</span></div>", unsafe_allow_html=True)
+        st.file_uploader(
+            "Fotos",
+            accept_multiple_files=True,
+            type=["jpg","jpeg","png","webp","bmp"],
+            key="fotos_imovel",
+            label_visibility="collapsed"
+        )
 
+        # Condições financeiras
         st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 6px 0;'>💰 Condições financeiras</div>", unsafe_allow_html=True)
-        cv, cvenc = st.columns(2)
-        with cv:   st.number_input("Valor do aluguel (R$)", min_value=0.0, step=50.0, format="%.2f", key="q_valor_aluguel")
-        with cvenc: st.number_input("Dia de vencimento", min_value=1, max_value=28, value=5, key="q_dia_vencimento")
-        cpag, cdur = st.columns(2)
-        with cpag: st.selectbox("Forma de pagamento", ["PIX","Boleto","Transferência bancária","Dinheiro"], key="q_forma_pagamento")
-        with cdur: st.selectbox("Duração", ["12 meses","24 meses","30 meses","36 meses","Indeterminado"], key="q_duracao_contrato")
-        st.date_input("Data de início", key="q_data_inicio_contrato")
+        col_val, col_venc = st.columns(2)
+        with col_val:  st.number_input("Valor do aluguel (R$)", min_value=0.0, step=50.0, format="%.2f", key="valor_aluguel")
+        with col_venc: st.number_input("Dia de vencimento", min_value=1, max_value=28, value=5, key="dia_vencimento")
+        col_pag, col_dur = st.columns(2)
+        with col_pag: st.selectbox("Forma de pagamento", ["PIX","Boleto","Transferência bancária","Dinheiro"], key="forma_pagamento")
+        with col_dur: st.selectbox("Duração", ["12 meses","24 meses","30 meses","36 meses","Indeterminado"], key="duracao_contrato")
+        st.date_input("Data de início", key="data_inicio_contrato")
 
+        # PIX condicional
         if st.session_state.get("forma_pagamento") == "PIX":
             st.markdown("<div style='background:#F0F7F0;border-radius:8px;padding:12px;margin-top:6px;'>", unsafe_allow_html=True)
-            st.markdown("<div style='font-size:12px;font-weight:700;margin-bottom:6px;'>🔑 Dados PIX do Locador</div>", unsafe_allow_html=True)
-            p1,p2 = st.columns(2)
-            with p1:
-                st.text_input("Chave PIX", placeholder="CPF, e-mail, telefone ou aleatória", key="q_pix_chave")
-                st.text_input("Nome do favorecido", key="q_pix_favorecido")
-            with p2:
-                st.text_input("Banco", placeholder="Ex: Nubank, Caixa...", key="q_pix_banco")
-                st.selectbox("Tipo de chave", ["CPF","CNPJ","E-mail","Telefone","Chave aleatória"], key="q_pix_tipo")
+            st.markdown("<div style='font-size:12px;font-weight:700;color:#1A1A2E;margin-bottom:6px;'>🔑 Dados PIX do Locador</div>", unsafe_allow_html=True)
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                st.text_input("Chave PIX", placeholder="CPF, e-mail, telefone ou aleatória", key="pix_chave")
+                st.text_input("Nome do favorecido", placeholder="Nome completo do Locador", key="pix_favorecido")
+            with col_p2:
+                st.text_input("Banco", placeholder="Ex: Nubank, Caixa...", key="pix_banco")
+                st.selectbox("Tipo de chave", ["CPF","CNPJ","E-mail","Telefone","Chave aleatória"], key="pix_tipo")
             st.markdown("</div>", unsafe_allow_html=True)
 
+        # Destinatário do email
         st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 4px 0;'>📤 Para quem vai a documentação?</div>", unsafe_allow_html=True)
-        st.text_input("", placeholder="Ex: Imobiliária Central, Sr. João...", key="q_nome_dest_locacao", label_visibility="collapsed")
+        st.text_input("", placeholder="Ex: Imobiliária Central, Sr. João...", key="nome_dest_locacao", label_visibility="collapsed")
 
-        st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:14px 0 4px 0;'>🤝 Intermediação <span style='font-weight:400;color:#9CA3AF;font-size:12px;'>(opcional)</span></div>", unsafe_allow_html=True)
-        tem_interm = st.checkbox("Há corretor ou imobiliária intermediando?", key="quiz_tem_interm")
-        if tem_interm:
-            with st.container(border=True):
-                i1,i2 = st.columns(2)
-                with i1: st.selectbox("Tipo", ["Corretor Autônomo","Imobiliária","Correspondente Imobiliário"], key="q_tipo_interm")
-                with i2: st.text_input("CRECI / CNPJ", placeholder="Ex: 12345-F", key="q_creci_interm")
-                i3,i4 = st.columns(2)
-                with i3: st.text_input("Nome / Razão social", key="q_nome_interm")
-                with i4: st.text_input("CPF / CNPJ", placeholder="000.000.000-00", key="q_cpf_cnpj_interm")
-                i5,i6 = st.columns(2)
-                with i5: st.text_input("Telefone", key="q_tel_interm")
-                with i6: st.text_input("E-mail", key="q_email_interm")
-                i7,i8 = st.columns(2)
-                with i7: st.selectbox("Modelo comissão", ["1º aluguel integral","Percentual","Valor fixo"], key="q_modelo_comissao")
-                with i8: st.text_input("Valor / %", placeholder="Ex: 100% ou R$ 1.200", key="valor_comissao_str")
-                tem_adm = st.checkbox("Taxa de administração mensal?", key="q_tem_adm")
-                if tem_adm:
-                    a1,a2 = st.columns(2)
-                    with a1: st.text_input("Taxa", placeholder="Ex: 10%", key="taxa_adm_str")
-                    with a2: st.multiselect("Serviços", ["Cobrança","Repasse","Vistoria","Renovação","Jurídico"], key="q_servicos_adm")
-                v1,v2 = st.columns(2)
-                with v1: st.text_input("Vigência", placeholder="Mesma do contrato", key="q_vigencia_interm")
-                with v2: st.text_input("Aviso prévio", placeholder="30 dias", key="q_aviso_interm")
-
-        area_ok = (st.session_state.get("area_res",0) or 0) > 0 if finalidade == "Residencial" else (st.session_state.get("area_com",0) or 0) > 0
+        # Validação de área
+        area_quiz = st.session_state.get("area_res", 0) if finalidade == "Residencial" else st.session_state.get("area_com", 0)
+        area_ok   = area_quiz and area_quiz > 0
 
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         if st.button(
             "Próximo →" if area_ok else "⚠️ Informe a área do imóvel para continuar",
             use_container_width=True,
             type="primary" if area_ok else "secondary",
-            key="quiz_prox_40",
+            key="quiz_prox_5",
             disabled=not area_ok
         ):
-            st.session_state["etapa_quiz"] = 4
+            st.session_state["etapa_quiz"] = 6
             st.rerun()
 
-    _quiz_voltar(3)
+    _quiz_voltar(4)
 
 
-# ── ETAPA 4 — Revisão + processar ────────────────────────────────
-def quiz_etapa_4():
-    """Etapa final — resumo e disparo do processamento."""
-    modo       = st.session_state.get("quiz_modo_servico", "email_aluguel")
+# ── ETAPA 6 — Revisão e processamento ────────────────────────────
+def quiz_etapa_6():
     finalidade = st.session_state.get("finalidade_imovel", "Residencial")
     garantia   = st.session_state.get("quiz_garantia", "—")
     tem_fiador = st.session_state.get("quiz_tem_fiador", False)
-    texto_ctx  = st.session_state.get("quiz_texto_contexto", "")
-    n_docs     = len(st.session_state.get("quiz_todos_docs_bytes", []))
-    _e_contrato = "contrato" in modo
-    total_etapas = 5 if _e_contrato else 4
-    etapa_num    = 5 if _e_contrato else 4
 
-    labels_modo = {
-        "email_aluguel":    "📧 Email — Aluguel",
-        "email_venda":      "📧 Email — Venda",
-        "contrato_aluguel": "📄 Contrato — Aluguel",
-        "contrato_venda":   "📄 Contrato — Venda",
-    }
     labels_garantia = {
-        "Fiador":"🤝 Fiador","Caução em dinheiro":"💰 Caução",
-        "Seguro-Fiança":"🛡️ Seguro Fiança","Título de Capitalização":"📄 Título Cap.",
-        "Caução de Bens (Real)":"🏠 Caução Real",
+        "fiador": "🤝 Fiador",
+        "caucao": "💰 Caução",
+        "seguro_fianca": "🛡️ Seguro Fiança",
+        "titulo_capitalizacao": "📄 Título de Capitalização",
     }
 
     with st.container():
         _quiz_card_inicio(
             "Tudo pronto! Revise e processe",
-            "Confira antes de gerar a documentação",
-            etapa=etapa_num, total=total_etapas
+            "Confira as informações antes de gerar a documentação",
+            etapa=6, total=6
         )
 
-        _val = st.session_state.get("valor_aluguel", 0) or 0
-        try:
-            _val_fmt = f"R$ {float(_val):,.2f}".replace(",","X").replace(".",",").replace("X",".")
-        except Exception:
-            _val_fmt = "R$ 0,00"
+        # Resumo visual
+        st.markdown(f"""
+        <div style='background:#F8FAFF;border:1px solid #DBEAFE;border-radius:12px;
+                    padding:16px 20px;margin-bottom:16px;font-size:13px;'>
+            <div style='display:flex;gap:24px;flex-wrap:wrap;'>
+                <div><span style='color:#6B7280;'>Tipo</span><br>
+                     <strong>{'🏠 Residencial' if finalidade == 'Residencial' else '🏢 Comercial'}</strong></div>
+                <div><span style='color:#6B7280;'>Garantia</span><br>
+                     <strong>{labels_garantia.get(garantia, garantia)}</strong></div>
+                <div><span style='color:#6B7280;'>Locador</span><br>
+                     <strong>{"✅ " + str(len(st.session_state.get("upload_locador",[]))) + " doc(s)" if st.session_state.get("upload_locador") else "❌ Sem docs"}</strong></div>
+                <div><span style='color:#6B7280;'>Locatário</span><br>
+                     <strong>{"✅ " + str(len(st.session_state.get("upload_locatario",[]))) + " doc(s)" if st.session_state.get("upload_locatario") else "❌ Sem docs"}</strong></div>
+                {'<div><span style=\'color:#6B7280;\'>Fiador</span><br><strong>' + ("✅ " + str(len(st.session_state.get("upload_fiador",[]))) + " doc(s)" if st.session_state.get("upload_fiador") else "❌ Sem docs") + '</strong></div>' if tem_fiador else ''}
+                <div><span style='color:#6B7280;'>Aluguel</span><br>
+                     <strong>R$ {st.session_state.get("valor_aluguel", 0):,.2f}</strong></div>
+                <div><span style='color:#6B7280;'>Fotos</span><br>
+                     <strong>{"📷 " + str(len(st.session_state.get("fotos_imovel",[]))) if st.session_state.get("fotos_imovel") else "Sem fotos"}</strong></div>
+            </div>
+        </div>
+        """.replace(",", ".", 1), unsafe_allow_html=True)
 
-        _tipo_txt  = "🏠 Residencial" if finalidade == "Residencial" else "🏢 Comercial"
-        _fiad_html = "<div><span style='color:#6B7280'>Fiador</span><br><strong>✅ Sim</strong></div>" if tem_fiador else ""
-        _val_html  = f"<div><span style='color:#6B7280'>Aluguel</span><br><strong>{_val_fmt}</strong></div>" if _e_contrato else ""
-
-        st.markdown(
-            "<div style='background:#F8FAFF;border:1px solid #DBEAFE;border-radius:12px;"
-            "padding:16px 20px;margin-bottom:12px;font-size:13px;'>"
-            "<div style='display:flex;gap:24px;flex-wrap:wrap;'>"
-            f"<div><span style='color:#6B7280'>Serviço</span><br><strong>{labels_modo.get(modo, modo)}</strong></div>"
-            f"<div><span style='color:#6B7280'>Imóvel</span><br><strong>{_tipo_txt}</strong></div>"
-            f"<div><span style='color:#6B7280'>Documentos</span><br><strong>{'✅ ' + str(n_docs) + ' arquivo(s)' if n_docs else '❌ Nenhum'}</strong></div>"
-            f"<div><span style='color:#6B7280'>Garantia</span><br><strong>{labels_garantia.get(garantia, garantia)}</strong></div>"
-            f"{_fiad_html}"
-            f"{_val_html}"
-            "</div></div>",
-            unsafe_allow_html=True
-        )
-
-        if texto_ctx:
-            st.markdown(
-                "<div style='background:#F0FFF4;border:1px solid #9AE6B4;border-radius:8px;"
-                "padding:10px 14px;margin-bottom:12px;font-size:12px;'>"
-                "<div style='font-weight:700;color:#276749;margin-bottom:4px;'>💬 Contexto das partes</div>"
-                f"<pre style='margin:0;white-space:pre-wrap;color:#2D3748;'>{texto_ctx}</pre>"
-                "</div>",
-                unsafe_allow_html=True
-            )
-
+        # Sincronizar tem_fiador_check com o sistema atual
         st.session_state["tem_fiador_check"] = tem_fiador
-        # Sincronizar endereço para contrato
-        if _e_contrato:
-            _ep = [st.session_state.get("quiz_end_rua",""), st.session_state.get("quiz_end_num",""), st.session_state.get("quiz_end_bairro","")]
-            _es = ", ".join(p for p in _ep if p)
-            if _es: st.session_state["quiz_endereco_imovel"] = _es
-            if st.session_state.get("quiz_end_cidade"): st.session_state["quiz_cidade_imovel"] = st.session_state["quiz_end_cidade"]
-            if st.session_state.get("quiz_end_uf"):     st.session_state["quiz_uf_imovel"]     = st.session_state["quiz_end_uf"]
 
-        _label_btn = "⚡  ANALISAR E GERAR CONTRATO" if _e_contrato else "⚡  ANALISAR E PREPARAR EMAIL"
+        # Adicionar endereço ao imovel_dados via session_state para o sistema usar
+        _end_partes = [
+            st.session_state.get("quiz_end_rua", ""),
+            st.session_state.get("quiz_end_num", ""),
+            st.session_state.get("quiz_end_bairro", ""),
+        ]
+        _end_str = ", ".join(p for p in _end_partes if p)
+        if _end_str:
+            st.session_state["quiz_endereco_imovel"] = _end_str
+        if st.session_state.get("quiz_end_cidade"):
+            st.session_state["quiz_cidade_imovel"] = st.session_state["quiz_end_cidade"]
+        if st.session_state.get("quiz_end_uf"):
+            st.session_state["quiz_uf_imovel"] = st.session_state["quiz_end_uf"]
+
         st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-        if st.button(_label_btn, type="primary", use_container_width=True, key="quiz_btn_processar"):
+
+        # Botão principal — ao clicar, marca flag e sai do stop para o processamento real
+        if st.button(
+            "⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO",
+            type="primary",
+            use_container_width=True,
+            key="quiz_btn_processar"
+        ):
             st.session_state["quiz_iniciar_processamento"] = True
             st.rerun()
-        st.caption(
-            "A IA processa todos os documentos, separa por pessoa e gera o contrato completo." if _e_contrato
-            else "A IA processa os documentos, extrai os dados e monta o email profissional organizado."
-        )
+        st.caption("A IA irá processar todos os documentos e gerar o contrato, termo de vistoria e email profissional.")
 
-    etapa_voltar = 40 if _e_contrato else 3
-    _quiz_voltar(etapa_voltar)
+    _quiz_voltar(5)
 
 
+# ── CONTROLADOR DO QUIZ ───────────────────────────────────────────
 def executar_modo_quiz():
-    """Controla o fluxo — etapas variam conforme email ou contrato."""
+    """Controla o fluxo completo do quiz por etapas."""
     etapa = st.session_state.get("etapa_quiz", 1)
 
     if etapa == 1:
@@ -3346,33 +3001,65 @@ def executar_modo_quiz():
         quiz_etapa_2()
     elif etapa == 3:
         quiz_etapa_3()
-    elif etapa == 40:   # só contrato
-        quiz_etapa_40()
     elif etapa == 4:
         quiz_etapa_4()
+    elif etapa == 5:
+        quiz_etapa_5()
+    elif etapa == 6:
+        quiz_etapa_6()
     elif etapa == 10:
-        pass  # crédito: vai direto ao painel
+        # Crédito imobiliário: vai direto ao painel completo
+        pass  # deixa o fluxo continuar normalmente abaixo
 
 
+# ══════════════════════════════════════════════════════════════════
 
-tipo_atendimento   = st.session_state.get("tipo_atendimento", "")
-_modo_interface    = st.session_state.get("modo_interface", "quiz")
-_quiz_modo_servico = st.session_state.get("quiz_modo_servico", "")
+tipo_atendimento = st.session_state.get("tipo_atendimento", "credito")
 
-# ── Botão recomeçar (aparece quando já há serviço em andamento) ───
-# ── Botão recomeçar (aparece quando já há serviço em andamento) ───
-if st.button("← Voltar ao início", key="trocar_tipo", use_container_width=True):
-    for key in ["tipo_atendimento","quiz_modo_servico","modo_interface",
-                "pdfs_gerados","email_gerado","processado","dados",
-                "etapa_quiz","quiz_garantia","quiz_tem_fiador",
-                "quiz_texto_contexto","quiz_todos_docs_bytes","quiz_imovel_dados",
-                "processado_loc","pdfs_gerados_loc","email_gerado_loc"]:
+# ── Seletor de modo (Painel completo vs Assistente guiado) ──
+badge_cor  = "#1565C0" if tipo_atendimento == "credito" else "#2E7D32"
+badge_txt  = "🏠 Crédito Imobiliário" if tipo_atendimento == "credito" else "🔑 Locação"
+
+_col_badge, _col_modo = st.columns([1, 2])
+with _col_badge:
+    st.markdown(f"""
+    <span style='background:{badge_cor};color:white;font-size:11px;font-weight:700;
+          padding:3px 12px;border-radius:20px;letter-spacing:0.5px;
+          display:inline-block;margin-top:6px;'>
+        {badge_txt}
+    </span>
+    """, unsafe_allow_html=True)
+
+with _col_modo:
+    _modo_atual = st.session_state.get("modo_interface", "painel")
+    _m1, _m2 = st.columns(2)
+    with _m1:
+        _class1 = "modo-btn-ativo" if _modo_atual == "painel" else "modo-btn-inativo"
+        st.markdown(f"<div class='{_class1}'>", unsafe_allow_html=True)
+        if st.button("📋 Painel completo", use_container_width=True, key="modo_painel"):
+            st.session_state["modo_interface"] = "painel"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    with _m2:
+        _class2 = "modo-btn-ativo" if _modo_atual == "quiz" else "modo-btn-inativo"
+        st.markdown(f"<div class='{_class2}'>", unsafe_allow_html=True)
+        if st.button("🧭 Assistente guiado", use_container_width=True, key="modo_quiz"):
+            st.session_state["modo_interface"] = "quiz"
+            if "etapa_quiz" not in st.session_state:
+                st.session_state["etapa_quiz"] = 1
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+if st.button("↩ Trocar tipo de atendimento", key="trocar_tipo", use_container_width=True):
+    for key in ["tipo_atendimento","pdfs_gerados","email_gerado","processado","dados",
+                "etapa_quiz","quiz_tipo_servico","quiz_garantia","quiz_tem_fiador"]:
         st.session_state.pop(key, None)
     st.rerun()
 
 st.divider()
 
-# ── Fluxo quiz ativo ──────────────────────────────────────────────
+# ── Se modo quiz ativo e é locação, executar o assistente ──
+_modo_interface = st.session_state.get("modo_interface", "painel")
 if _modo_interface == "quiz" and tipo_atendimento == "locacao":
     _quiz_iniciar = st.session_state.get("quiz_iniciar_processamento", False)
     _processado_loc = st.session_state.get("processado_loc", False)
@@ -3381,134 +3068,78 @@ if _modo_interface == "quiz" and tipo_atendimento == "locacao":
         # Já processou — cai no fluxo normal para mostrar resultados
         pass
     elif _quiz_iniciar:
-        _modo_servico = st.session_state.get("quiz_modo_servico", "email_aluguel")
-
-        # ── FLUXO EMAIL ALUGUEL — classifica docs e valida checklist ──
-        if _modo_servico == "email_aluguel":
-            _todos_bytes = st.session_state.get("quiz_todos_docs_bytes", [])
-            _texto_ctx   = st.session_state.get("quiz_texto_contexto", "")
-            _tem_fiador  = st.session_state.get("quiz_tem_fiador", False)
-
-            if not st.session_state.get("quiz_docs_classificados"):
-                with st.spinner("🔍 Identificando documentos..."):
-                    _classificados = classificar_docs_por_tipo(_todos_bytes, _texto_ctx)
-                    st.session_state["quiz_docs_classificados"] = _classificados
-            else:
-                _classificados = st.session_state["quiz_docs_classificados"]
-
-            _validacao = validar_checklist_locacao(_classificados, _tem_fiador, _texto_ctx)
-
-            if not _validacao["ok"]:
-                st.session_state["quiz_iniciar_processamento"] = False
-                st.markdown("""
-                <div style='background:#FFF5F5;border:1.5px solid #FC8181;border-radius:12px;
-                            padding:16px 20px;margin-bottom:12px;'>
-                    <div style='font-size:15px;font-weight:700;color:#C53030;margin-bottom:8px;'>
-                        ⛔ Documentação incompleta — envio bloqueado
-                    </div>
-                    <div style='font-size:13px;color:#742A2A;'>
-                        Os documentos abaixo são obrigatórios para o gerente/correspondente aprovar o inquilino.
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                _labels_polo = {"locatario":"👤 Locatário","locador":"🏠 Locador","fiador":"🤝 Fiador"}
-                for _polo, _res in _validacao["polos"].items():
-                    if _res["faltando"]:
-                        with st.container(border=True):
-                            st.markdown(f"**{_labels_polo.get(_polo, _polo.upper())}**")
-                            for _doc in _res["faltando"]:
-                                st.markdown(f"❌ **{_doc}** — não encontrado nos arquivos enviados")
-                            if _res["presentes"]:
-                                st.caption(f"✅ Já identificados: {', '.join(_res['presentes'])}")
-                if st.button("📎 Enviar documentos faltantes", type="primary", use_container_width=True, key="quiz_reenviar_docs"):
-                    st.session_state.pop("quiz_docs_classificados", None)
-                    st.session_state["etapa_quiz"] = 3
-                    st.rerun()
-                st.stop()
-
-            # Checklist OK — prosseguir
-            st.session_state["quiz_imovel_dados"] = {
-                "finalidade": st.session_state.get("finalidade_imovel", ""),
-                "garantia":   st.session_state.get("quiz_garantia", ""),
-                "matricula":  "",
-            }
-            st.session_state["quiz_iniciar_processamento"] = False
-
-        else:
-            # contrato_aluguel / email_venda / contrato_venda
-            _fin = st.session_state.get("finalidade_imovel", "Residencial")
-            _mat = st.session_state.get("mat_imovel", "")
-            _imovel_quiz = {"finalidade": _fin, "matricula": _mat}
-            if _fin == "Residencial":
-                _imovel_quiz.update({
-                    "tipo_imovel":  st.session_state.get("tipo_res", "Casa"),
-                    "area":         st.session_state.get("area_res", 0) or "",
-                    "quartos":      st.session_state.get("quartos_r", 0),
-                    "suites":       st.session_state.get("suites_r", 0),
-                    "banheiros":    st.session_state.get("banhos_r", 0),
-                    "salas":        st.session_state.get("salas_r", 0),
-                    "vagas":        st.session_state.get("vagas_r", 0),
-                    "mobiliado":    st.session_state.get("mob_r", "Não"),
-                    "cozinha":      st.session_state.get("coz_r", True),
-                    "area_servico": st.session_state.get("as_r", False),
-                    "varanda":      st.session_state.get("var_r", False),
-                    "quintal":      st.session_state.get("qui_r", False),
-                    "descricao":    st.session_state.get("desc_res", ""),
-                })
-            else:
-                _imovel_quiz.update({
-                    "tipo_imovel":         st.session_state.get("tipo_com", "Sala comercial"),
-                    "area":                st.session_state.get("area_com", 0) or "",
-                    "salas_internas":      st.session_state.get("salas_c", 0),
-                    "banheiros":           st.session_state.get("banhos_c", 0),
-                    "vagas":               st.session_state.get("vagas_c", 0),
-                    "recepcao":            st.session_state.get("rec_c", False),
-                    "deposito":            st.session_state.get("dep_c", False),
-                    "copa":                st.session_state.get("copa_c", False),
-                    "atividade_permitida": st.session_state.get("ativ_c", ""),
-                    "cnae":                st.session_state.get("cnae_c", ""),
-                    "descricao":           st.session_state.get("desc_com", ""),
-                })
-            _pix = {}
-            if st.session_state.get("forma_pagamento") == "PIX":
-                _pix = {
-                    "chave":      st.session_state.get("pix_chave", ""),
-                    "favorecido": st.session_state.get("pix_favorecido", ""),
-                    "banco":      st.session_state.get("pix_banco", ""),
-                    "tipo":       st.session_state.get("pix_tipo", "CPF"),
-                }
+        # Usuário clicou em processar no quiz — limpar flag e deixar o fluxo
+        # de locação rodar normalmente (if tipo_atendimento == "locacao" abaixo)
+        # Para isso, precisamos que as variáveis do painel estejam mapeadas
+        # O fluxo principal espera: upload_locador, upload_locatario, etc. (mesmas keys)
+        # e imovel_dados — que precisa ser montado aqui
+        _fin = st.session_state.get("finalidade_imovel", "Residencial")
+        _mat = st.session_state.get("mat_imovel", "")
+        _imovel_quiz = {"finalidade": _fin, "matricula": _mat}
+        if _fin == "Residencial":
             _imovel_quiz.update({
-                "valor_aluguel":    st.session_state.get("valor_aluguel", 0),
-                "dia_vencimento":   st.session_state.get("dia_vencimento", 5),
-                "forma_pagamento":  st.session_state.get("forma_pagamento", "PIX"),
-                "duracao_contrato": st.session_state.get("duracao_contrato", "12 meses"),
-                "data_inicio":      str(st.session_state.get("data_inicio_contrato", "")),
-                "pix_dados":        _pix,
-                "fotos":            len(st.session_state.get("fotos_imovel", [])),
-                "intermediacao": {
-                    "tipo":            st.session_state.get("tipo_interm", ""),
-                    "nome":            st.session_state.get("nome_interm", ""),
-                    "creci_cnpj":      st.session_state.get("creci_interm", ""),
-                    "cpf_cnpj":        st.session_state.get("cpf_cnpj_interm", ""),
-                    "telefone":        st.session_state.get("tel_interm", ""),
-                    "email":           st.session_state.get("email_interm", ""),
-                    "modelo_comissao": st.session_state.get("modelo_comissao", ""),
-                    "valor_comissao":  st.session_state.get("valor_comissao_str", ""),
-                    "tem_adm":         st.session_state.get("tem_adm", False),
-                    "taxa_adm":        st.session_state.get("taxa_adm_str", ""),
-                    "servicos_adm":    st.session_state.get("servicos_adm", []),
-                    "vigencia":        st.session_state.get("vigencia_interm", ""),
-                    "aviso_rescisao":  st.session_state.get("aviso_interm", ""),
-                } if st.session_state.get("quiz_tem_interm") else {},
-                "cidade": st.session_state.get("quiz_end_cidade", ""),
-                "uf":     st.session_state.get("quiz_end_uf", ""),
+                "tipo_imovel":  st.session_state.get("tipo_res", "Casa"),
+                "area":         st.session_state.get("area_res", 0) or "",
+                "quartos":      st.session_state.get("quartos_r", 0),
+                "suites":       st.session_state.get("suites_r", 0),
+                "banheiros":    st.session_state.get("banhos_r", 0),
+                "salas":        st.session_state.get("salas_r", 0),
+                "vagas":        st.session_state.get("vagas_r", 0),
+                "mobiliado":    st.session_state.get("mob_r", "Não"),
+                "cozinha":      st.session_state.get("coz_r", True),
+                "area_servico": st.session_state.get("as_r", False),
+                "varanda":      st.session_state.get("var_r", False),
+                "quintal":      st.session_state.get("qui_r", False),
+                "descricao":    st.session_state.get("desc_res", ""),
             })
-            st.session_state["quiz_imovel_dados"] = _imovel_quiz
-            st.session_state["quiz_iniciar_processamento"] = False
+        else:
+            _imovel_quiz.update({
+                "tipo_imovel":          st.session_state.get("tipo_com", "Sala comercial"),
+                "area":                 st.session_state.get("area_com", 0) or "",
+                "salas_internas":       st.session_state.get("salas_c", 0),
+                "banheiros":            st.session_state.get("banhos_c", 0),
+                "vagas":                st.session_state.get("vagas_c", 0),
+                "recepcao":             st.session_state.get("rec_c", False),
+                "deposito":             st.session_state.get("dep_c", False),
+                "copa":                 st.session_state.get("copa_c", False),
+                "atividade_permitida":  st.session_state.get("ativ_c", ""),
+                "cnae":                 st.session_state.get("cnae_c", ""),
+                "descricao":            st.session_state.get("desc_com", ""),
+            })
+        # Endereço e financeiro
+        _pix = {}
+        if st.session_state.get("forma_pagamento") == "PIX":
+            _pix = {
+                "chave":      st.session_state.get("pix_chave", ""),
+                "favorecido": st.session_state.get("pix_favorecido", ""),
+                "banco":      st.session_state.get("pix_banco", ""),
+                "tipo":       st.session_state.get("pix_tipo", "CPF"),
+            }
+        _imovel_quiz.update({
+            "valor_aluguel":    st.session_state.get("valor_aluguel", 0),
+            "dia_vencimento":   st.session_state.get("dia_vencimento", 5),
+            "forma_pagamento":  st.session_state.get("forma_pagamento", "PIX"),
+            "duracao_contrato": st.session_state.get("duracao_contrato", "12 meses"),
+            "data_inicio":      str(st.session_state.get("data_inicio_contrato", "")),
+            "pix_dados":        _pix,
+            "fotos":            len(st.session_state.get("fotos_imovel", [])),
+            "intermediacao":    {},
+            "cidade":           st.session_state.get("quiz_end_cidade", ""),
+            "uf":               st.session_state.get("quiz_end_uf", ""),
+        })
+        st.session_state["quiz_imovel_dados"] = _imovel_quiz
+        st.session_state["quiz_iniciar_processamento"] = False
+        # Não chama st.stop() — o bloco elif tipo_atendimento == "locacao" vai rodar
     else:
         # Quiz normal — mostra etapas e para
         executar_modo_quiz()
         st.stop()
+elif _modo_interface == "quiz" and tipo_atendimento == "credito":
+    # Crédito: mostrar etapa 1 do quiz uma vez, depois redireciona ao painel
+    if not st.session_state.get("processado"):
+        if st.session_state.get("etapa_quiz", 1) == 1:
+            quiz_etapa_1()
+            st.stop()
 
 # ══════════════════════════════════════════════════════
 # FLUXO A — CRÉDITO IMOBILIÁRIO (existente, sem alteração)
@@ -3742,277 +3373,32 @@ if tipo_atendimento == "credito":
 # ══════════════════════════════════════════════════════
 elif tipo_atendimento == "locacao":
 
-  # Se veio do quiz e já processou — pula direto para resultados (st.stop() no final)
-  _quiz_ativo = bool(st.session_state.get("quiz_modo_servico"))
-
   # ── Se vier do modo quiz com flag de processar, pula toda a UI e vai direto ──
   _vindo_do_quiz = (
       st.session_state.get("modo_interface") == "quiz"
       and st.session_state.get("quiz_imovel_dados") is not None
-      and not st.session_state.get("quiz_iniciar_processamento", False)
+      and not st.session_state.get("quiz_iniciar_processamento", True)
   )
   if _vindo_do_quiz and not st.session_state.get("processado_loc"):
       class _FakeFile:
           def __init__(self, nome, dados):
-              self.name = nome
-              self._dados = dados
+              self.name = nome; self._dados = dados
           def read(self): return self._dados
           def seek(self, n): pass
-
       tem_fiador   = st.session_state.get("quiz_tem_fiador", False)
-      _todos_bytes = st.session_state.get("quiz_todos_docs_bytes", [])
-      _todos_files = [_FakeFile(s["name"], s["bytes"]) for s in _todos_bytes]
-
-      # Todos os docs vão para todos os polos — a IA usa o contexto para separar
+      _raw         = st.session_state.get("quiz_todos_docs_bytes", [])
+      _todos_files = [_FakeFile(s["name"], s["bytes"]) for s in _raw]
       upload_locador    = _todos_files
       upload_locatario  = _todos_files
       upload_fiador     = _todos_files if tem_fiador else []
       imovel_dados      = st.session_state.get("quiz_imovel_dados", {})
+      imovel_dados.setdefault("intermediacao", {})
       finalidade_imovel = imovel_dados.get("finalidade", "")
-      fotos_upload      = st.session_state.get("fotos_imovel", [])
-      if "intermediacao" not in imovel_dados:
-          imovel_dados["intermediacao"] = {}
-      processar_loc    = True
+      fotos_upload      = []
+      processar_loc     = True
   else:
       processar_loc = False
       _vindo_do_quiz = False
-
-
-  if processar_loc:
-    # ── Bloqueios obrigatórios ──
-    erros_bloqueio = []
-    if not upload_locador:
-        erros_bloqueio.append("📂 Envie os documentos do **LOCADOR** (Bloco 01)")
-    if not upload_locatario:
-        erros_bloqueio.append("📂 Envie os documentos do **LOCATÁRIO** (Bloco 02)")
-    if tem_fiador and not upload_fiador:
-        erros_bloqueio.append("📂 Garantia = Fiador: envie os documentos do **FIADOR** (Bloco 03)")
-    if finalidade_imovel and not imovel_dados.get("area") and st.session_state.get("quiz_modo_servico","").startswith("contrato"):
-        erros_bloqueio.append("📐 Informe a **área do imóvel** (obrigatória para a cláusula contratual)")
-
-    if erros_bloqueio:
-        for e in erros_bloqueio:
-            st.error(e)
-    else:
-        def bytes_polo(upload_list):
-            result = []
-            for arq in upload_list:
-                conteudo = arq.read()
-                tipo = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
-                result.append((arq.name, conteudo, tipo))
-            return result
-
-        barra = st.progress(0, text="⚡ Processando documentos...")
-
-        # No modo quiz os bytes já estão salvos — não reler FakeFiles (read() só funciona uma vez)
-        if _vindo_do_quiz:
-            _raw = st.session_state.get("quiz_todos_docs_bytes", [])
-            _todos_lidos = [(d["name"], d["bytes"], "pdf" if d["name"].lower().endswith(".pdf") else "imagem") for d in _raw]
-            bytes_locador   = _todos_lidos
-            bytes_locatario = _todos_lidos
-            bytes_fiador    = _todos_lidos if tem_fiador else []
-        else:
-            def bytes_polo(upload_list):
-                result = []
-                for arq in upload_list:
-                    conteudo = arq.read()
-                    tipo = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
-                    result.append((arq.name, conteudo, tipo))
-                return result
-            bytes_locador   = bytes_polo(upload_locador)
-            bytes_locatario = bytes_polo(upload_locatario)
-            bytes_fiador    = bytes_polo(upload_fiador) if upload_fiador else []
-
-        # Contexto de texto: quiz usa o campo de contexto do corretor; painel usa texto_locacao
-        _ctx_quiz = st.session_state.get("quiz_texto_contexto", "")
-        texto_loc_val = _ctx_quiz if _vindo_do_quiz and _ctx_quiz else st.session_state.get("texto_locacao","")
-
-        # ── PROCESSAMENTO PARALELO — todas as chamadas à API ao mesmo tempo ──
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        resultados = {}
-        erros_thread = {}
-
-        def tarefa(nome, fn, *args):
-            try:
-                return nome, fn(*args), None
-            except Exception as e:
-                return nome, None, str(e)
-
-        _modo_srv = st.session_state.get("quiz_modo_servico", "")
-        _so_email = _modo_srv in ("email_aluguel", "email_venda")
-
-        if _so_email:
-            tarefas = [
-                ("dados_locador",   extrair_dados_polo, bytes_locador,   "locador",   texto_loc_val),
-                ("dados_locatario", extrair_dados_polo, bytes_locatario, "locatario", texto_loc_val),
-            ]
-            if bytes_fiador:
-                tarefas.append(("dados_fiador", extrair_dados_polo, bytes_fiador, "fiador", texto_loc_val))
-        else:
-            tarefas = [
-                ("pdfs_locador",   processar_documentos, bytes_locador),
-                ("pdfs_locatario", processar_documentos, bytes_locatario),
-                ("dados_locador",  extrair_dados_polo,   bytes_locador,   "locador",   texto_loc_val),
-                ("dados_locatario",extrair_dados_polo,   bytes_locatario, "locatario", texto_loc_val),
-            ]
-            if bytes_fiador:
-                tarefas.append(("pdfs_fiador",  processar_documentos, bytes_fiador))
-                tarefas.append(("dados_fiador", extrair_dados_polo,   bytes_fiador, "fiador", texto_loc_val))
-
-        total = len(tarefas)
-        concluidas = 0
-        with ThreadPoolExecutor(max_workers=total) as executor:
-            futures = {executor.submit(tarefa, t[0], t[1], *t[2:]): t[0] for t in tarefas}
-            for future in as_completed(futures):
-                nome_t, resultado, erro = future.result()
-                concluidas += 1
-                pct = int((concluidas / total) * 80)
-                barra.progress(pct, text=f"⚡ Processando... {concluidas}/{total} tarefas concluídas")
-                if erro:
-                    erros_thread[nome_t] = erro
-                else:
-                    resultados[nome_t] = resultado
-
-        pdfs_locador   = resultados.get("pdfs_locador",   [])
-        pdfs_locatario = resultados.get("pdfs_locatario", [])
-        pdfs_fiador    = resultados.get("pdfs_fiador",    [])
-        dados_locador_ext   = resultados.get("dados_locador",   {})
-        dados_locatario_ext = resultados.get("dados_locatario", {})
-        dados_fiador_ext    = resultados.get("dados_fiador",    {}) if bytes_fiador else {}
-
-        # Extrair cidade/UF do imóvel a partir dos dados do locador (endereço do proprietário)
-        cidade_extraida = dados_locador_ext.get("cidade_imovel", "").strip()
-        uf_extraida     = dados_locador_ext.get("uf_imovel", "").strip()
-        if cidade_extraida and not imovel_dados.get("cidade"):
-            imovel_dados["cidade"] = cidade_extraida
-        if uf_extraida and not imovel_dados.get("uf"):
-            imovel_dados["uf"] = uf_extraida
-
-        # Mesclar campos manuais (email e telefone) — têm prioridade sobre os extraídos
-        def _mesclar_manual(dados, key_email, key_tel):
-            email_m = st.session_state.get(key_email, "").strip()
-            tel_m   = st.session_state.get(key_tel,   "").strip()
-            if email_m: dados["email"]    = email_m
-            if tel_m:   dados["telefone"] = tel_m
-            return dados
-
-        dados_locador_ext   = _mesclar_manual(dados_locador_ext,   "email_manual_locador",   "tel_manual_locador")
-        dados_locatario_ext = _mesclar_manual(dados_locatario_ext, "email_manual_locatario", "tel_manual_locatario")
-        if bytes_fiador:
-            dados_fiador_ext = _mesclar_manual(dados_fiador_ext,   "email_manual_fiador",    "tel_manual_fiador")
-
-        # Validações pós-extração — avisos, não bloqueios
-        avisos_dados = []
-        if not dados_locador_ext.get("cpf"):
-            avisos_dados.append("⚠️ CPF do **LOCADOR** não identificado automaticamente — verifique ou adicione no campo de texto")
-        if not dados_locatario_ext.get("cpf"):
-            avisos_dados.append("⚠️ CPF do **LOCATÁRIO** não identificado automaticamente — verifique ou adicione no campo de texto")
-        if not dados_locatario_ext.get("renda_valor"):
-            avisos_dados.append("⚠️ Renda do **LOCATÁRIO** não identificada — adicione no campo de texto (Ex: Renda R$3.200)")
-        if bytes_fiador and not dados_fiador_ext.get("cpf"):
-            avisos_dados.append("⚠️ CPF do **FIADOR** não identificado automaticamente — verifique ou adicione no campo de texto")
-
-        # Exibe avisos mas continua processamento sempre
-        for a in avisos_dados:
-            st.warning(a)
-
-        # Salvar previews para mini checklist
-        st.session_state["preview_locador"]   = dados_locador_ext
-        st.session_state["preview_locatario"] = dados_locatario_ext
-        st.session_state["preview_fiador"]    = dados_fiador_ext
-
-        # Dados consolidados do locatário (polo principal do email)
-        dados_loc = dados_locatario_ext.copy()
-        dados_loc["nome_destinatario"] = st.session_state.get("nome_dest_locacao","")
-
-        # Todos os PDFs combinados para download
-        pdfs_loc = pdfs_locador + pdfs_locatario + pdfs_fiador
-
-        _modo_servico_atual = st.session_state.get("quiz_modo_servico", "")
-        _is_email = _modo_servico_atual in ("email_aluguel", "email_venda")
-
-        # Gerar cláusula contratual — só para contratos
-        barra.progress(75, text="⚖️ Gerando cláusula contratual..." if not _is_email else "📧 Montando email...")
-        clausula_loc = ""
-        if not _is_email:
-            if finalidade_imovel == "Residencial":
-                clausula_loc = gerar_clausula_residencial(imovel_dados)
-            elif finalidade_imovel == "Comercial":
-                clausula_loc = gerar_clausula_comercial(imovel_dados)
-
-        barra.progress(82, text="📷 Analisando fotos do imóvel..." if not _is_email else "📧 Montando email...")
-        termo_vistoria_bytes = None
-        fotos_nomes = []
-        if fotos_upload and not _is_email:
-            fotos_bytes_raw = []
-            for foto in fotos_upload:
-                conteudo_foto = foto.read()
-                fotos_bytes_raw.append((foto.name, conteudo_foto))
-                fotos_nomes.append(foto.name)
-            descricao_ia = analisar_fotos_vistoria(fotos_bytes_raw)
-            imovel_dados["vistoria_gerada"] = True
-            termo_vistoria_bytes = gerar_termo_vistoria_pdf(imovel_dados, descricao_ia, fotos_nomes)
-        else:
-            imovel_dados["vistoria_gerada"] = False
-
-        barra.progress(92, text="✍️ Gerando email profissional...")
-        email_loc = gerar_email_locacao(
-            dados_loc, pdfs_loc, imovel=imovel_dados,
-            dados_locador_direto=dados_locador_ext,
-            dados_locatario_direto=dados_locatario_ext,
-            dados_fiador_direto=dados_fiador_ext if bytes_fiador else {},
-            docs_classificados=st.session_state.get("quiz_docs_classificados")
-        )
-        barra.progress(100, text="✅ Documentação pronta!")
-        time.sleep(0.4); barra.empty()
-
-        st.session_state["pdfs_gerados_loc"]    = pdfs_loc
-        st.session_state["pdfs_polo_locador"]   = pdfs_locador
-        st.session_state["pdfs_polo_locatario"] = pdfs_locatario
-        st.session_state["pdfs_polo_fiador"]    = pdfs_fiador
-        st.session_state["email_gerado_loc"]    = email_loc
-        st.session_state["dados_loc"]           = dados_loc
-        st.session_state["dados_locador"]       = dados_locador_ext
-        st.session_state["dados_locatario"]     = dados_locatario_ext
-        st.session_state["dados_fiador"]        = dados_fiador_ext
-        st.session_state["imovel_loc"]          = imovel_dados
-        st.session_state["clausula_loc"]        = clausula_loc
-        st.session_state["termo_vistoria_loc"]  = termo_vistoria_bytes
-        st.session_state["fotos_nomes_loc"]     = fotos_nomes
-        st.session_state["processado_loc"]      = True
-
-        # ── Score de risco (calcula em background, salva no session_state) ──
-        cliente_sess = st.session_state.get("cliente")
-        is_pro_score = cliente_sess.get("plano","free") in ("mensal","semestral","anual") if cliente_sess else False
-        if is_pro_score:
-            with st.spinner("📊 Calculando score de risco..."):
-                _score = calcular_score_risco(dados_locatario_ext, dados_fiador_ext if bytes_fiador else None, imovel_dados)
-                st.session_state["score_risco_loc"] = _score
-        else:
-            st.session_state["score_risco_loc"] = None
-
-        # ── Registrar no histórico ──
-        if cliente_sess:
-            total_arqs = len(bytes_locador) + len(bytes_locatario) + len(bytes_fiador)
-            registrar_uso(cliente_sess, qtd_arquivos=total_arqs)
-            _score_val = st.session_state.get("score_risco_loc",{})
-            _end_imovel = imovel_dados.get("logradouro","") or imovel_dados.get("endereco_completo","")
-            _hist_criado = __import__("datetime").datetime.now().isoformat()
-            st.session_state["hist_criado_em"] = _hist_criado
-            registrar_historico(
-                cliente_sess,
-                tipo="Locação",
-                nome_locatario=dados_locatario_ext.get("nome_completo",""),
-                nome_locador=dados_locador_ext.get("nome_completo",""),
-                score=_score_val.get("score") if _score_val else None,
-                status="Em andamento",
-                contrato_gerado=False,
-                email_enviado=False,
-                endereco_imovel=_end_imovel,
-                valor_aluguel=imovel_dados.get("valor_aluguel",""),
-            )
-
 
   # helper CSS inline para mini checklist
   def render_mini_checklist(ok_items, falta_items):
@@ -4022,8 +3408,7 @@ elif tipo_atendimento == "locacao":
           st.markdown(f"<span style='color:#C62828;font-size:12px;font-weight:600;'>{i}</span>", unsafe_allow_html=True)
 
   # ── UI do painel — só renderiza no modo painel (não no quiz) ──
-  _veio_do_quiz = bool(st.session_state.get("quiz_modo_servico"))
-  if not _vindo_do_quiz and not _veio_do_quiz:
+  if not _vindo_do_quiz:
 
    # ── BLOCO 01 — LOCADOR ──
    with st.container(border=True):
@@ -4057,400 +3442,7 @@ elif tipo_atendimento == "locacao":
           else:
               st.caption(f"📎 {len(upload_locador)} arquivo(s) do locador selecionado(s)")
 
-  # Quando quiz ativo e ainda não processou — não renderiza o painel, para aqui
-  if _quiz_ativo and not st.session_state.get("processado_loc"):
-      st.stop()
-
-  # ── BLOCO 02 — LOCATÁRIO ──
-  with st.container(border=True):
-      st.markdown("""
-      <div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
-          <span style='background:#2E7D32;color:white;font-size:12px;font-weight:700;
-              padding:3px 10px;border-radius:20px;'>02</span>
-          <span style='font-size:15px;font-weight:700;color:#1A1A2E;'>🔑 Documentos do LOCATÁRIO</span>
-      </div>
-      <div style='font-size:12px;color:#5C6B7A;margin-bottom:8px;'>
-          Inquilino — RG/CNH, CPF, comprovante de renda, comprovante de residência
-      </div>
-      """, unsafe_allow_html=True)
-      upload_locatario = st.file_uploader(
-          "Arraste ou clique para selecionar os documentos do Locatário",
-          accept_multiple_files=True,
-          type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
-          key="upload_locatario",
-      )
-      col_locat1, col_locat2 = st.columns(2)
-      with col_locat1:
-          st.text_input("📧 E-mail do Locatário", placeholder="locatario@email.com", key="email_manual_locatario")
-      with col_locat2:
-          st.text_input("📱 Contato (WhatsApp/Tel)", placeholder="(81) 99999-0000", key="tel_manual_locatario")
-      if upload_locatario:
-          dados_locat_preview = st.session_state.get("preview_locatario", {})
-          if dados_locat_preview:
-              ok_lt, falta_lt = mini_checklist_polo(dados_locat_preview, "locatario")
-              with st.expander("📋 Dados identificados — Locatário", expanded=False):
-                  render_mini_checklist(ok_lt, falta_lt)
-          else:
-              st.caption(f"📎 {len(upload_locatario)} arquivo(s) do locatário selecionado(s)")
-
-  # ── BLOCO 03 — FIADOR (condicional) ──
-  tem_fiador = st.checkbox("🤝 Há fiador neste contrato?", key="tem_fiador_check")
-
-  upload_fiador = []
-  if tem_fiador:
-      with st.container(border=True):
-          st.markdown("""
-          <div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
-              <span style='background:#E65100;color:white;font-size:12px;font-weight:700;
-                  padding:3px 10px;border-radius:20px;'>03</span>
-              <span style='font-size:15px;font-weight:700;color:#1A1A2E;'>🤝 Documentos do FIADOR</span>
-          </div>
-          <div style='font-size:12px;color:#5C6B7A;margin-bottom:8px;'>
-              Garantidor — RG/CNH, CPF, comprovante de renda, residência e documento do imóvel próprio
-          </div>
-          """, unsafe_allow_html=True)
-          upload_fiador = st.file_uploader(
-              "Arraste ou clique para selecionar os documentos do Fiador",
-              accept_multiple_files=True,
-              type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
-              key="upload_fiador",
-          )
-          col_fiad1, col_fiad2 = st.columns(2)
-          with col_fiad1:
-              st.text_input("📧 E-mail do Fiador", placeholder="fiador@email.com", key="email_manual_fiador")
-          with col_fiad2:
-              st.text_input("📱 Contato (WhatsApp/Tel)", placeholder="(81) 99999-0000", key="tel_manual_fiador")
-          if upload_fiador:
-              dados_fiador_preview = st.session_state.get("preview_fiador", {})
-              if dados_fiador_preview:
-                  ok_f, falta_f = mini_checklist_polo(dados_fiador_preview, "fiador")
-                  with st.expander("📋 Dados identificados — Fiador", expanded=False):
-                      render_mini_checklist(ok_f, falta_f)
-              else:
-                  st.caption(f"📎 {len(upload_fiador)} arquivo(s) do fiador selecionado(s)")
-
-  # ── BLOCO 04 — Destinatário ──
-  st.markdown("""
-<div class='card-section' style='border-left-color:#2E7D32;'>
-    <span class='step-number' style='background:#2E7D32;'>05</span>
-    <p class='section-title'>Para quem vai a documentação?</p>
-    <p class='section-subtitle'>Nome da imobiliária, proprietário ou gestor que vai receber</p>
-</div>
-""", unsafe_allow_html=True)
-  st.text_input(
-      "",
-      placeholder="Ex: Imobiliária Central, Sr. João, Construtora...",
-      key="nome_dest_locacao",
-      label_visibility="collapsed"
-  )
-
-  # ── SEÇÃO 06 — Detalhes do Imóvel ──
-  st.markdown("""
-<div class='card-section' style='border-left-color:#2E7D32;'>
-    <span class='step-number' style='background:#2E7D32;'>06</span>
-    <p class='section-title'>Detalhes do imóvel</p>
-    <p class='section-subtitle'>Preencha para gerar cláusula contratual e termo de vistoria automaticamente</p>
-</div>
-""", unsafe_allow_html=True)
-
-  # — Matrícula (campo jurídico, qualquer finalidade) —
-  col_mat1, col_mat2 = st.columns(2)
-  with col_mat1:
-      matricula_imovel = st.text_input("Matrícula do imóvel (opcional)", placeholder="Ex: 12.345", key="mat_imovel")
-  with col_mat2:
-      st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-
-  # — Finalidade —
-  st.markdown("<div style='font-size:13px;font-weight:700;color:#1A1A2E;margin:8px 0 6px 0;'>Finalidade do imóvel</div>", unsafe_allow_html=True)
-  col_f1, col_f2 = st.columns(2)
-  with col_f1:
-      btn_res = st.button("🏠  Residencial", use_container_width=True,
-                          type="primary" if st.session_state.get("finalidade_imovel") == "Residencial" else "secondary",
-                          key="btn_residencial")
-  with col_f2:
-      btn_com = st.button("🏢  Comercial", use_container_width=True,
-                          type="primary" if st.session_state.get("finalidade_imovel") == "Comercial" else "secondary",
-                          key="btn_comercial")
-  if btn_res: st.session_state["finalidade_imovel"] = "Residencial"; st.rerun()
-  if btn_com: st.session_state["finalidade_imovel"] = "Comercial";   st.rerun()
-
-  finalidade_imovel = st.session_state.get("finalidade_imovel", "")
-
-  # — Campos Residencial —
-  imovel_dados = {"finalidade": finalidade_imovel, "matricula": matricula_imovel}
-
-  if finalidade_imovel == "Residencial":
-      st.markdown("<div style='background:#F0F7F0;border-radius:8px;padding:16px;margin-top:8px;'>", unsafe_allow_html=True)
-      col_ti, col_area = st.columns(2)
-      with col_ti:
-          tipo_res = st.selectbox("Tipo de imóvel", ["Casa","Apartamento","Kitnet","Cobertura","Studio","Sobrado","Flat"], key="tipo_res")
-      with col_area:
-          area_res = st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="area_res")
-
-      col_q, col_s, col_b, col_sal = st.columns(4)
-      with col_q:  quartos_r  = st.number_input("Quartos",   min_value=0, step=1, key="quartos_r")
-      with col_s:  suites_r   = st.number_input("Suítes",    min_value=0, step=1, key="suites_r")
-      with col_b:  banhos_r   = st.number_input("Banheiros", min_value=0, step=1, key="banhos_r")
-      with col_sal: salas_r   = st.number_input("Salas",     min_value=0, step=1, key="salas_r")
-
-      col_v, col_mob = st.columns(2)
-      with col_v:   vagas_r   = st.number_input("Vagas de garagem", min_value=0, step=1, key="vagas_r")
-      with col_mob: mob_r     = st.selectbox("Mobiliado", ["Não","Parcial","Total"], key="mob_r")
-
-      st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:8px 0 4px 0;'>Cômodos e dependências</div>", unsafe_allow_html=True)
-      col_c1, col_c2, col_c3, col_c4 = st.columns(4)
-      with col_c1: coz_r  = st.checkbox("Cozinha",        key="coz_r",  value=True)
-      with col_c2: as_r   = st.checkbox("Área de serviço",key="as_r")
-      with col_c3: var_r  = st.checkbox("Varanda",        key="var_r")
-      with col_c4: qui_r  = st.checkbox("Quintal",        key="qui_r")
-
-      desc_r = st.text_area("Descrição adicional (opcional)", height=70,
-                             placeholder="Ex: Apartamento reformado, vista para o mar...",
-                             key="desc_res")
-      st.markdown("</div>", unsafe_allow_html=True)
-
-      imovel_dados.update({
-          "tipo_imovel": tipo_res, "area": area_res if area_res > 0 else "",
-          "quartos": quartos_r, "suites": suites_r, "banheiros": banhos_r,
-          "salas": salas_r, "vagas": vagas_r, "mobiliado": mob_r,
-          "cozinha": coz_r, "area_servico": as_r, "varanda": var_r, "quintal": qui_r,
-          "descricao": desc_r,
-      })
-
-  # — Campos Comercial —
-  elif finalidade_imovel == "Comercial":
-      st.markdown("<div style='background:#F0F4FF;border-radius:8px;padding:16px;margin-top:8px;'>", unsafe_allow_html=True)
-      col_tc, col_areac = st.columns(2)
-      with col_tc:
-          tipo_com = st.selectbox("Tipo de imóvel", ["Sala comercial","Loja","Galpão","Consultório","Coworking","Pavilhão","Conjunto comercial"], key="tipo_com")
-      with col_areac:
-          area_com = st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="area_com")
-
-      col_sc, col_bc, col_vc, col_pd = st.columns(4)
-      with col_sc: salas_c  = st.number_input("Salas internas", min_value=0, step=1, key="salas_c")
-      with col_bc: banhos_c = st.number_input("Banheiros",      min_value=0, step=1, key="banhos_c")
-      with col_vc: vagas_c  = st.number_input("Vagas",          min_value=0, step=1, key="vagas_c")
-      with col_pd: pe_dir   = st.number_input("Pé-direito (m)", min_value=0.0, step=0.1, key="pe_dir")
-
-      col_dep1, col_dep2, col_dep3 = st.columns(3)
-      with col_dep1: rec_c  = st.checkbox("Recepção", key="rec_c")
-      with col_dep2: dep_c  = st.checkbox("Depósito", key="dep_c")
-      with col_dep3: copa_c = st.checkbox("Copa",     key="copa_c")
-
-      col_uso1, col_uso2 = st.columns(2)
-      with col_uso1: uso_leve  = st.checkbox("Uso leve",  key="uso_leve",  value=True)
-      with col_uso2: uso_pesado = st.checkbox("Uso pesado", key="uso_pesado")
-
-      ativ_c = st.text_input("Atividade permitida", placeholder="Ex: Comércio varejista de vestuário", key="ativ_c")
-      cnae_c = st.text_input("CNAE (opcional)",     placeholder="Ex: 4781-4/00", key="cnae_c")
-      desc_c = st.text_area("Descrição adicional (opcional)", height=70,
-                             placeholder="Ex: Localizado em galeria com alto fluxo...",
-                             key="desc_com")
-      st.markdown("</div>", unsafe_allow_html=True)
-
-      imovel_dados.update({
-          "tipo_imovel": tipo_com, "area": area_com if area_com > 0 else "",
-          "salas_internas": salas_c, "banheiros": banhos_c, "vagas": vagas_c,
-          "pe_direito": pe_dir if pe_dir > 0 else "",
-          "recepcao": rec_c, "deposito": dep_c, "copa": copa_c,
-          "uso_pesado": uso_pesado,
-          "atividade_permitida": ativ_c, "cnae": cnae_c, "descricao": desc_c,
-      })
-
-  # — Seção de Fotos / Vistoria —
-  with st.container(border=True):
-      st.markdown("""
-      <div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
-          <span style='background:#2E7D32;color:white;font-size:12px;font-weight:700;
-              padding:3px 10px;border-radius:20px;'>07</span>
-          <span style='font-size:15px;font-weight:700;color:#1A1A2E;'>📷 Fotos e vistoria <span style='font-weight:400;color:#5C6B7A;font-size:13px;'>(opcional)</span></span>
-      </div>
-      <div style='font-size:12px;color:#5C6B7A;margin-bottom:8px;'>
-          Anexe fotos do imóvel — a IA descreve o estado de conservação com linguagem neutra
-      </div>
-      """, unsafe_allow_html=True)
-      fotos_upload = st.file_uploader(
-          "Arraste ou clique para selecionar as fotos do imóvel",
-          accept_multiple_files=True,
-          type=["jpg","jpeg","png","webp","bmp"],
-          key="fotos_imovel"
-      )
-      if fotos_upload:
-          st.caption(f"📷 {len(fotos_upload)} foto(s) selecionada(s) — o Termo de Vistoria será gerado automaticamente")
-
-  imovel_dados["fotos"] = len(fotos_upload) if fotos_upload else 0
-
-  # ── BLOCO 08 — Condições Financeiras ──
-  st.markdown("""
-<div class='card-section' style='border-left-color:#2E7D32;'>
-    <span class='step-number' style='background:#2E7D32;'>08</span>
-    <p class='section-title'>💰 Condições financeiras do contrato</p>
-    <p class='section-subtitle'>Valor, forma de pagamento e prazo — usados para gerar o contrato</p>
-</div>
-""", unsafe_allow_html=True)
-
-  col_val, col_venc = st.columns(2)
-  with col_val:
-      valor_aluguel = st.number_input("Valor do aluguel (R$)", min_value=0.0, step=50.0, format="%.2f", key="valor_aluguel")
-  with col_venc:
-      dia_vencimento = st.number_input("Dia de vencimento", min_value=1, max_value=28, value=5, step=1, key="dia_vencimento")
-
-  col_pag, col_dur = st.columns(2)
-  with col_pag:
-      forma_pagamento = st.selectbox("Forma de pagamento", ["PIX","Boleto","Transferência bancária","Dinheiro"], key="forma_pagamento")
-  with col_dur:
-      duracao_contrato = st.selectbox("Duração do contrato", ["12 meses","24 meses","30 meses","36 meses","Indeterminado"], key="duracao_contrato")
-
-  data_inicio = st.date_input("Data de início do contrato", key="data_inicio_contrato")
-
-  # Dados PIX — aparecem condicionalmente
-  pix_dados = {}
-  if forma_pagamento == "PIX":
-      st.markdown("<div style='background:#F0F7F0;border-radius:8px;padding:14px;margin-top:6px;'>", unsafe_allow_html=True)
-      st.markdown("<div style='font-size:13px;font-weight:700;color:#1A1A2E;margin-bottom:8px;'>🔑 Dados PIX do Locador</div>", unsafe_allow_html=True)
-      col_p1, col_p2 = st.columns(2)
-      with col_p1:
-          pix_chave    = st.text_input("Chave PIX", placeholder="CPF, e-mail, telefone ou aleatória", key="pix_chave")
-          pix_favorecido = st.text_input("Nome do favorecido", placeholder="Nome completo do Locador", key="pix_favorecido")
-      with col_p2:
-          pix_banco    = st.text_input("Banco", placeholder="Ex: Nubank, Caixa, Bradesco...", key="pix_banco")
-          pix_tipo     = st.selectbox("Tipo de chave", ["CPF","CNPJ","E-mail","Telefone","Chave aleatória"], key="pix_tipo")
-      st.markdown("</div>", unsafe_allow_html=True)
-      pix_dados = {"chave": pix_chave, "favorecido": pix_favorecido, "banco": pix_banco, "tipo": pix_tipo}
-
-  imovel_dados.update({
-      "valor_aluguel": valor_aluguel,
-      "dia_vencimento": dia_vencimento,
-      "forma_pagamento": forma_pagamento,
-      "duracao_contrato": duracao_contrato,
-      "data_inicio": str(data_inicio),
-      "pix_dados": pix_dados,
-  })
-
-  # Validação de área obrigatória — só para contratos
-  area_val = imovel_dados.get("area", "")
-  if finalidade_imovel and not area_val and not _veio_do_quiz:
-      st.warning("⚠️ Área do imóvel é obrigatória para gerar o contrato.")
-
-  # ── BLOCO 09 — Intermediação Imobiliária ──
-  st.markdown("""
-<div class='card-section' style='border-left-color:#6A1B9A;'>
-    <span class='step-number' style='background:#6A1B9A;'>09</span>
-    <p class='section-title'>🤝 Intermediação Imobiliária</p>
-    <p class='section-subtitle'>Dados do corretor ou imobiliária responsável — comissão, administração e vigência</p>
-</div>
-""", unsafe_allow_html=True)
-
-  tem_intermediacao = st.checkbox("Há intermediação imobiliária neste contrato?", key="tem_intermediacao", value=True)
-
-  interm_dados = {}
-  if tem_intermediacao:
-      st.markdown("<div style='background:#F9F0FF;border-radius:8px;padding:16px;margin-top:4px;'>", unsafe_allow_html=True)
-
-      col_ti1, col_ti2 = st.columns(2)
-      with col_ti1:
-          tipo_interm = st.selectbox("Tipo de intermediador", ["Corretor Autônomo","Imobiliária (Pessoa Jurídica)"], key="tipo_interm")
-      with col_ti2:
-          creci_interm = st.text_input("CRECI / CNPJ", placeholder="Ex: CRECI-PE 12345 ou 00.000.000/0001-00", key="creci_interm")
-
-      nome_interm = st.text_input("Nome completo / Razão social", placeholder="Ex: João Silva Corretor ou Imobiliária Central Ltda", key="nome_interm")
-
-      col_ti3, col_ti4 = st.columns(2)
-      with col_ti3:
-          cpf_cnpj_interm = st.text_input("CPF / CNPJ do intermediador", placeholder="000.000.000-00 ou 00.000.000/0001-00", key="cpf_cnpj_interm")
-      with col_ti4:
-          tel_interm = st.text_input("Telefone", placeholder="(81) 99999-0000", key="tel_interm")
-
-      st.markdown("---")
-      st.markdown("<div style='font-size:13px;font-weight:700;color:#6A1B9A;margin-bottom:8px;'>💰 Comissão de Locação (1º aluguel)</div>", unsafe_allow_html=True)
-
-      col_tc1, col_tc2 = st.columns(2)
-      with col_tc1:
-          modelo_comissao = st.selectbox("Modelo de comissão", [
-              "1º aluguel integral ao intermediador",
-              "50% ao intermediador / 50% ao proprietário",
-              "Percentual do 1º aluguel",
-              "Valor fixo combinado",
-          ], key="modelo_comissao")
-      with col_tc2:
-          if modelo_comissao == "Percentual do 1º aluguel":
-              pct_comissao = st.number_input("Percentual (%)", min_value=0.0, max_value=100.0, value=100.0, step=5.0, key="pct_comissao")
-              valor_comissao_str = f"{pct_comissao}% do 1º aluguel"
-          elif modelo_comissao == "Valor fixo combinado":
-              val_comissao = st.number_input("Valor fixo (R$)", min_value=0.0, step=50.0, key="val_comissao")
-              valor_comissao_str = f"R$ {val_comissao:,.2f}".replace(",","X").replace(".",",").replace("X",".")
-          elif modelo_comissao == "50% ao intermediador / 50% ao proprietário":
-              valor_comissao_str = "50% do 1º aluguel ao intermediador e 50% ao proprietário"
-              st.caption("50% intermediador / 50% proprietário")
-          else:
-              valor_comissao_str = "1º aluguel integral"
-              st.caption("100% do 1º aluguel ao intermediador")
-
-      st.markdown("---")
-      st.markdown("<div style='font-size:13px;font-weight:700;color:#6A1B9A;margin-bottom:8px;'>📋 Taxa de Administração (mensal)</div>", unsafe_allow_html=True)
-
-      tem_adm = st.checkbox("Há taxa de administração mensal?", key="tem_adm")
-      taxa_adm_str = ""
-      if tem_adm:
-          col_adm1, col_adm2 = st.columns(2)
-          with col_adm1:
-              pct_adm = st.number_input("Percentual de administração (%)", min_value=0.0, max_value=30.0, value=10.0, step=0.5, key="pct_adm")
-          with col_adm2:
-              base_adm = st.selectbox("Base de cálculo", ["Sobre o valor do aluguel","Sobre o valor total (aluguel + encargos)"], key="base_adm")
-          taxa_adm_str = f"{pct_adm}% ao mês — {base_adm.lower()}"
-          responsavel_adm = st.text_input("Responsável pela administração", value=st.session_state.get("nome_interm",""), key="responsavel_adm")
-          servicos_adm = st.multiselect("Serviços incluídos na administração", [
-              "Cobrança de aluguel","Repasse ao proprietário","Gestão de inadimplência",
-              "Vistoria periódica","Renovação contratual","Atendimento ao locatário",
-          ], default=["Cobrança de aluguel","Repasse ao proprietário"], key="servicos_adm")
-
-      st.markdown("---")
-      st.markdown("<div style='font-size:13px;font-weight:700;color:#6A1B9A;margin-bottom:8px;'>📅 Vigência da Intermediação</div>", unsafe_allow_html=True)
-
-      col_vig1, col_vig2 = st.columns(2)
-      with col_vig1:
-          vigencia_interm = st.selectbox("Vigência do mandato de administração", [
-              "Mesma vigência do contrato de locação",
-              "12 meses renovável",
-              "24 meses renovável",
-              "Indeterminada",
-          ], key="vigencia_interm")
-      with col_vig2:
-          aviso_interm = st.selectbox("Aviso prévio para rescisão da intermediação", [
-              "30 dias","60 dias","90 dias"
-          ], key="aviso_interm")
-
-      email_interm = st.text_input("E-mail do intermediador", placeholder="corretor@email.com", key="email_interm")
-
-      st.markdown("</div>", unsafe_allow_html=True)
-
-      interm_dados = {
-          "tipo":            tipo_interm,
-          "nome":            nome_interm,
-          "creci_cnpj":      creci_interm,
-          "cpf_cnpj":        cpf_cnpj_interm,
-          "telefone":        tel_interm,
-          "email":           email_interm,
-          "modelo_comissao": modelo_comissao,
-          "valor_comissao":  valor_comissao_str,
-          "tem_adm":         tem_adm,
-          "taxa_adm":        taxa_adm_str,
-          "servicos_adm":    servicos_adm if tem_adm else [],
-          "vigencia":        vigencia_interm,
-          "aviso_rescisao":  aviso_interm,
-      }
-
-  if not _vindo_do_quiz and not _veio_do_quiz:
-      imovel_dados["intermediacao"] = interm_dados
-      st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-      processar_loc = st.button("⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO", type="primary", use_container_width=True, key="btn_processar_locacao")
-  # (se _vindo_do_quiz, processar_loc já foi definido como True e imovel_dados já está montado)
-
   if st.session_state.get("processado_loc"):
-    # Se veio do quiz e já processou — mostra resultados e para (não renderiza painel)
-    if _quiz_ativo:
-        pass  # continua para o bloco de resultados abaixo
-    # (no modo painel, o bloco de resultados também renderiza normalmente)
     pdfs_loc         = st.session_state["pdfs_gerados_loc"]
     email_loc        = st.session_state["email_gerado_loc"]
     dados_loc        = st.session_state.get("dados_loc", {})
@@ -4934,9 +3926,619 @@ elif tipo_atendimento == "locacao":
                     st.error(f"❌ Erro ao enviar: {e}")
     st.divider()
     if st.button("🔄 Novo atendimento", use_container_width=True, key="novo_loc"):
-        for key in ["pdfs_gerados_loc","email_gerado_loc","processado_loc","dados_loc","tipo_atendimento"]:
+        for key in ["pdfs_gerados_loc","email_gerado_loc","processado_loc","dados_loc",
+                    "tipo_atendimento","quiz_modo_servico","modo_interface","etapa_quiz",
+                    "quiz_imovel_dados","quiz_todos_docs_bytes","quiz_texto_contexto",
+                    "quiz_garantia","quiz_tem_fiador","quiz_docs_classificados"]:
             if key in st.session_state: del st.session_state[key]
         st.rerun()
+
+
+  # ── Quiz: mostra resultados acima; para antes do painel ──
+  if st.session_state.get("quiz_modo_servico"):
+      st.stop()
+
+  # ── BLOCO 02 — LOCATÁRIO ──
+  with st.container(border=True):
+      st.markdown("""
+      <div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
+          <span style='background:#2E7D32;color:white;font-size:12px;font-weight:700;
+              padding:3px 10px;border-radius:20px;'>02</span>
+          <span style='font-size:15px;font-weight:700;color:#1A1A2E;'>🔑 Documentos do LOCATÁRIO</span>
+      </div>
+      <div style='font-size:12px;color:#5C6B7A;margin-bottom:8px;'>
+          Inquilino — RG/CNH, CPF, comprovante de renda, comprovante de residência
+      </div>
+      """, unsafe_allow_html=True)
+      upload_locatario = st.file_uploader(
+          "Arraste ou clique para selecionar os documentos do Locatário",
+          accept_multiple_files=True,
+          type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
+          key="upload_locatario",
+      )
+      col_locat1, col_locat2 = st.columns(2)
+      with col_locat1:
+          st.text_input("📧 E-mail do Locatário", placeholder="locatario@email.com", key="email_manual_locatario")
+      with col_locat2:
+          st.text_input("📱 Contato (WhatsApp/Tel)", placeholder="(81) 99999-0000", key="tel_manual_locatario")
+      if upload_locatario:
+          dados_locat_preview = st.session_state.get("preview_locatario", {})
+          if dados_locat_preview:
+              ok_lt, falta_lt = mini_checklist_polo(dados_locat_preview, "locatario")
+              with st.expander("📋 Dados identificados — Locatário", expanded=False):
+                  render_mini_checklist(ok_lt, falta_lt)
+          else:
+              st.caption(f"📎 {len(upload_locatario)} arquivo(s) do locatário selecionado(s)")
+
+  # ── BLOCO 03 — FIADOR (condicional) ──
+  tem_fiador = st.checkbox("🤝 Há fiador neste contrato?", key="tem_fiador_check")
+
+  upload_fiador = []
+  if tem_fiador:
+      with st.container(border=True):
+          st.markdown("""
+          <div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
+              <span style='background:#E65100;color:white;font-size:12px;font-weight:700;
+                  padding:3px 10px;border-radius:20px;'>03</span>
+              <span style='font-size:15px;font-weight:700;color:#1A1A2E;'>🤝 Documentos do FIADOR</span>
+          </div>
+          <div style='font-size:12px;color:#5C6B7A;margin-bottom:8px;'>
+              Garantidor — RG/CNH, CPF, comprovante de renda, residência e documento do imóvel próprio
+          </div>
+          """, unsafe_allow_html=True)
+          upload_fiador = st.file_uploader(
+              "Arraste ou clique para selecionar os documentos do Fiador",
+              accept_multiple_files=True,
+              type=["jpg","jpeg","png","bmp","webp","tiff","pdf"],
+              key="upload_fiador",
+          )
+          col_fiad1, col_fiad2 = st.columns(2)
+          with col_fiad1:
+              st.text_input("📧 E-mail do Fiador", placeholder="fiador@email.com", key="email_manual_fiador")
+          with col_fiad2:
+              st.text_input("📱 Contato (WhatsApp/Tel)", placeholder="(81) 99999-0000", key="tel_manual_fiador")
+          if upload_fiador:
+              dados_fiador_preview = st.session_state.get("preview_fiador", {})
+              if dados_fiador_preview:
+                  ok_f, falta_f = mini_checklist_polo(dados_fiador_preview, "fiador")
+                  with st.expander("📋 Dados identificados — Fiador", expanded=False):
+                      render_mini_checklist(ok_f, falta_f)
+              else:
+                  st.caption(f"📎 {len(upload_fiador)} arquivo(s) do fiador selecionado(s)")
+
+  # ── BLOCO 04 — Destinatário ──
+  st.markdown("""
+<div class='card-section' style='border-left-color:#2E7D32;'>
+    <span class='step-number' style='background:#2E7D32;'>05</span>
+    <p class='section-title'>Para quem vai a documentação?</p>
+    <p class='section-subtitle'>Nome da imobiliária, proprietário ou gestor que vai receber</p>
+</div>
+""", unsafe_allow_html=True)
+  st.text_input(
+      "",
+      placeholder="Ex: Imobiliária Central, Sr. João, Construtora...",
+      key="nome_dest_locacao",
+      label_visibility="collapsed"
+  )
+
+  # ── SEÇÃO 06 — Detalhes do Imóvel ──
+  st.markdown("""
+<div class='card-section' style='border-left-color:#2E7D32;'>
+    <span class='step-number' style='background:#2E7D32;'>06</span>
+    <p class='section-title'>Detalhes do imóvel</p>
+    <p class='section-subtitle'>Preencha para gerar cláusula contratual e termo de vistoria automaticamente</p>
+</div>
+""", unsafe_allow_html=True)
+
+  # — Matrícula (campo jurídico, qualquer finalidade) —
+  col_mat1, col_mat2 = st.columns(2)
+  with col_mat1:
+      matricula_imovel = st.text_input("Matrícula do imóvel (opcional)", placeholder="Ex: 12.345", key="mat_imovel")
+  with col_mat2:
+      st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+
+  # — Finalidade —
+  st.markdown("<div style='font-size:13px;font-weight:700;color:#1A1A2E;margin:8px 0 6px 0;'>Finalidade do imóvel</div>", unsafe_allow_html=True)
+  col_f1, col_f2 = st.columns(2)
+  with col_f1:
+      btn_res = st.button("🏠  Residencial", use_container_width=True,
+                          type="primary" if st.session_state.get("finalidade_imovel") == "Residencial" else "secondary",
+                          key="btn_residencial")
+  with col_f2:
+      btn_com = st.button("🏢  Comercial", use_container_width=True,
+                          type="primary" if st.session_state.get("finalidade_imovel") == "Comercial" else "secondary",
+                          key="btn_comercial")
+  if btn_res: st.session_state["finalidade_imovel"] = "Residencial"; st.rerun()
+  if btn_com: st.session_state["finalidade_imovel"] = "Comercial";   st.rerun()
+
+  finalidade_imovel = st.session_state.get("finalidade_imovel", "")
+
+  # — Campos Residencial —
+  imovel_dados = {"finalidade": finalidade_imovel, "matricula": matricula_imovel}
+
+  if finalidade_imovel == "Residencial":
+      st.markdown("<div style='background:#F0F7F0;border-radius:8px;padding:16px;margin-top:8px;'>", unsafe_allow_html=True)
+      col_ti, col_area = st.columns(2)
+      with col_ti:
+          tipo_res = st.selectbox("Tipo de imóvel", ["Casa","Apartamento","Kitnet","Cobertura","Studio","Sobrado","Flat"], key="tipo_res")
+      with col_area:
+          area_res = st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="area_res")
+
+      col_q, col_s, col_b, col_sal = st.columns(4)
+      with col_q:  quartos_r  = st.number_input("Quartos",   min_value=0, step=1, key="quartos_r")
+      with col_s:  suites_r   = st.number_input("Suítes",    min_value=0, step=1, key="suites_r")
+      with col_b:  banhos_r   = st.number_input("Banheiros", min_value=0, step=1, key="banhos_r")
+      with col_sal: salas_r   = st.number_input("Salas",     min_value=0, step=1, key="salas_r")
+
+      col_v, col_mob = st.columns(2)
+      with col_v:   vagas_r   = st.number_input("Vagas de garagem", min_value=0, step=1, key="vagas_r")
+      with col_mob: mob_r     = st.selectbox("Mobiliado", ["Não","Parcial","Total"], key="mob_r")
+
+      st.markdown("<div style='font-size:13px;font-weight:600;color:#1A1A2E;margin:8px 0 4px 0;'>Cômodos e dependências</div>", unsafe_allow_html=True)
+      col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+      with col_c1: coz_r  = st.checkbox("Cozinha",        key="coz_r",  value=True)
+      with col_c2: as_r   = st.checkbox("Área de serviço",key="as_r")
+      with col_c3: var_r  = st.checkbox("Varanda",        key="var_r")
+      with col_c4: qui_r  = st.checkbox("Quintal",        key="qui_r")
+
+      desc_r = st.text_area("Descrição adicional (opcional)", height=70,
+                             placeholder="Ex: Apartamento reformado, vista para o mar...",
+                             key="desc_res")
+      st.markdown("</div>", unsafe_allow_html=True)
+
+      imovel_dados.update({
+          "tipo_imovel": tipo_res, "area": area_res if area_res > 0 else "",
+          "quartos": quartos_r, "suites": suites_r, "banheiros": banhos_r,
+          "salas": salas_r, "vagas": vagas_r, "mobiliado": mob_r,
+          "cozinha": coz_r, "area_servico": as_r, "varanda": var_r, "quintal": qui_r,
+          "descricao": desc_r,
+      })
+
+  # — Campos Comercial —
+  elif finalidade_imovel == "Comercial":
+      st.markdown("<div style='background:#F0F4FF;border-radius:8px;padding:16px;margin-top:8px;'>", unsafe_allow_html=True)
+      col_tc, col_areac = st.columns(2)
+      with col_tc:
+          tipo_com = st.selectbox("Tipo de imóvel", ["Sala comercial","Loja","Galpão","Consultório","Coworking","Pavilhão","Conjunto comercial"], key="tipo_com")
+      with col_areac:
+          area_com = st.number_input("Área (m²) *", min_value=0.0, step=1.0, key="area_com")
+
+      col_sc, col_bc, col_vc, col_pd = st.columns(4)
+      with col_sc: salas_c  = st.number_input("Salas internas", min_value=0, step=1, key="salas_c")
+      with col_bc: banhos_c = st.number_input("Banheiros",      min_value=0, step=1, key="banhos_c")
+      with col_vc: vagas_c  = st.number_input("Vagas",          min_value=0, step=1, key="vagas_c")
+      with col_pd: pe_dir   = st.number_input("Pé-direito (m)", min_value=0.0, step=0.1, key="pe_dir")
+
+      col_dep1, col_dep2, col_dep3 = st.columns(3)
+      with col_dep1: rec_c  = st.checkbox("Recepção", key="rec_c")
+      with col_dep2: dep_c  = st.checkbox("Depósito", key="dep_c")
+      with col_dep3: copa_c = st.checkbox("Copa",     key="copa_c")
+
+      col_uso1, col_uso2 = st.columns(2)
+      with col_uso1: uso_leve  = st.checkbox("Uso leve",  key="uso_leve",  value=True)
+      with col_uso2: uso_pesado = st.checkbox("Uso pesado", key="uso_pesado")
+
+      ativ_c = st.text_input("Atividade permitida", placeholder="Ex: Comércio varejista de vestuário", key="ativ_c")
+      cnae_c = st.text_input("CNAE (opcional)",     placeholder="Ex: 4781-4/00", key="cnae_c")
+      desc_c = st.text_area("Descrição adicional (opcional)", height=70,
+                             placeholder="Ex: Localizado em galeria com alto fluxo...",
+                             key="desc_com")
+      st.markdown("</div>", unsafe_allow_html=True)
+
+      imovel_dados.update({
+          "tipo_imovel": tipo_com, "area": area_com if area_com > 0 else "",
+          "salas_internas": salas_c, "banheiros": banhos_c, "vagas": vagas_c,
+          "pe_direito": pe_dir if pe_dir > 0 else "",
+          "recepcao": rec_c, "deposito": dep_c, "copa": copa_c,
+          "uso_pesado": uso_pesado,
+          "atividade_permitida": ativ_c, "cnae": cnae_c, "descricao": desc_c,
+      })
+
+  # — Seção de Fotos / Vistoria —
+  with st.container(border=True):
+      st.markdown("""
+      <div style='display:flex;align-items:center;gap:10px;margin-bottom:4px;'>
+          <span style='background:#2E7D32;color:white;font-size:12px;font-weight:700;
+              padding:3px 10px;border-radius:20px;'>07</span>
+          <span style='font-size:15px;font-weight:700;color:#1A1A2E;'>📷 Fotos e vistoria <span style='font-weight:400;color:#5C6B7A;font-size:13px;'>(opcional)</span></span>
+      </div>
+      <div style='font-size:12px;color:#5C6B7A;margin-bottom:8px;'>
+          Anexe fotos do imóvel — a IA descreve o estado de conservação com linguagem neutra
+      </div>
+      """, unsafe_allow_html=True)
+      fotos_upload = st.file_uploader(
+          "Arraste ou clique para selecionar as fotos do imóvel",
+          accept_multiple_files=True,
+          type=["jpg","jpeg","png","webp","bmp"],
+          key="fotos_imovel"
+      )
+      if fotos_upload:
+          st.caption(f"📷 {len(fotos_upload)} foto(s) selecionada(s) — o Termo de Vistoria será gerado automaticamente")
+
+  imovel_dados["fotos"] = len(fotos_upload) if fotos_upload else 0
+
+  # ── BLOCO 08 — Condições Financeiras ──
+  st.markdown("""
+<div class='card-section' style='border-left-color:#2E7D32;'>
+    <span class='step-number' style='background:#2E7D32;'>08</span>
+    <p class='section-title'>💰 Condições financeiras do contrato</p>
+    <p class='section-subtitle'>Valor, forma de pagamento e prazo — usados para gerar o contrato</p>
+</div>
+""", unsafe_allow_html=True)
+
+  col_val, col_venc = st.columns(2)
+  with col_val:
+      valor_aluguel = st.number_input("Valor do aluguel (R$)", min_value=0.0, step=50.0, format="%.2f", key="valor_aluguel")
+  with col_venc:
+      dia_vencimento = st.number_input("Dia de vencimento", min_value=1, max_value=28, value=5, step=1, key="dia_vencimento")
+
+  col_pag, col_dur = st.columns(2)
+  with col_pag:
+      forma_pagamento = st.selectbox("Forma de pagamento", ["PIX","Boleto","Transferência bancária","Dinheiro"], key="forma_pagamento")
+  with col_dur:
+      duracao_contrato = st.selectbox("Duração do contrato", ["12 meses","24 meses","30 meses","36 meses","Indeterminado"], key="duracao_contrato")
+
+  data_inicio = st.date_input("Data de início do contrato", key="data_inicio_contrato")
+
+  # Dados PIX — aparecem condicionalmente
+  pix_dados = {}
+  if forma_pagamento == "PIX":
+      st.markdown("<div style='background:#F0F7F0;border-radius:8px;padding:14px;margin-top:6px;'>", unsafe_allow_html=True)
+      st.markdown("<div style='font-size:13px;font-weight:700;color:#1A1A2E;margin-bottom:8px;'>🔑 Dados PIX do Locador</div>", unsafe_allow_html=True)
+      col_p1, col_p2 = st.columns(2)
+      with col_p1:
+          pix_chave    = st.text_input("Chave PIX", placeholder="CPF, e-mail, telefone ou aleatória", key="pix_chave")
+          pix_favorecido = st.text_input("Nome do favorecido", placeholder="Nome completo do Locador", key="pix_favorecido")
+      with col_p2:
+          pix_banco    = st.text_input("Banco", placeholder="Ex: Nubank, Caixa, Bradesco...", key="pix_banco")
+          pix_tipo     = st.selectbox("Tipo de chave", ["CPF","CNPJ","E-mail","Telefone","Chave aleatória"], key="pix_tipo")
+      st.markdown("</div>", unsafe_allow_html=True)
+      pix_dados = {"chave": pix_chave, "favorecido": pix_favorecido, "banco": pix_banco, "tipo": pix_tipo}
+
+  imovel_dados.update({
+      "valor_aluguel": valor_aluguel,
+      "dia_vencimento": dia_vencimento,
+      "forma_pagamento": forma_pagamento,
+      "duracao_contrato": duracao_contrato,
+      "data_inicio": str(data_inicio),
+      "pix_dados": pix_dados,
+  })
+
+  # Validação de área obrigatória
+  area_val = imovel_dados.get("area", "")
+  if finalidade_imovel and not area_val:
+      st.warning("⚠️ Área do imóvel é obrigatória para gerar o contrato.")
+
+  # ── BLOCO 09 — Intermediação Imobiliária ──
+  st.markdown("""
+<div class='card-section' style='border-left-color:#6A1B9A;'>
+    <span class='step-number' style='background:#6A1B9A;'>09</span>
+    <p class='section-title'>🤝 Intermediação Imobiliária</p>
+    <p class='section-subtitle'>Dados do corretor ou imobiliária responsável — comissão, administração e vigência</p>
+</div>
+""", unsafe_allow_html=True)
+
+  tem_intermediacao = st.checkbox("Há intermediação imobiliária neste contrato?", key="tem_intermediacao", value=True)
+
+  interm_dados = {}
+  if tem_intermediacao:
+      st.markdown("<div style='background:#F9F0FF;border-radius:8px;padding:16px;margin-top:4px;'>", unsafe_allow_html=True)
+
+      col_ti1, col_ti2 = st.columns(2)
+      with col_ti1:
+          tipo_interm = st.selectbox("Tipo de intermediador", ["Corretor Autônomo","Imobiliária (Pessoa Jurídica)"], key="tipo_interm")
+      with col_ti2:
+          creci_interm = st.text_input("CRECI / CNPJ", placeholder="Ex: CRECI-PE 12345 ou 00.000.000/0001-00", key="creci_interm")
+
+      nome_interm = st.text_input("Nome completo / Razão social", placeholder="Ex: João Silva Corretor ou Imobiliária Central Ltda", key="nome_interm")
+
+      col_ti3, col_ti4 = st.columns(2)
+      with col_ti3:
+          cpf_cnpj_interm = st.text_input("CPF / CNPJ do intermediador", placeholder="000.000.000-00 ou 00.000.000/0001-00", key="cpf_cnpj_interm")
+      with col_ti4:
+          tel_interm = st.text_input("Telefone", placeholder="(81) 99999-0000", key="tel_interm")
+
+      st.markdown("---")
+      st.markdown("<div style='font-size:13px;font-weight:700;color:#6A1B9A;margin-bottom:8px;'>💰 Comissão de Locação (1º aluguel)</div>", unsafe_allow_html=True)
+
+      col_tc1, col_tc2 = st.columns(2)
+      with col_tc1:
+          modelo_comissao = st.selectbox("Modelo de comissão", [
+              "1º aluguel integral ao intermediador",
+              "50% ao intermediador / 50% ao proprietário",
+              "Percentual do 1º aluguel",
+              "Valor fixo combinado",
+          ], key="modelo_comissao")
+      with col_tc2:
+          if modelo_comissao == "Percentual do 1º aluguel":
+              pct_comissao = st.number_input("Percentual (%)", min_value=0.0, max_value=100.0, value=100.0, step=5.0, key="pct_comissao")
+              valor_comissao_str = f"{pct_comissao}% do 1º aluguel"
+          elif modelo_comissao == "Valor fixo combinado":
+              val_comissao = st.number_input("Valor fixo (R$)", min_value=0.0, step=50.0, key="val_comissao")
+              valor_comissao_str = f"R$ {val_comissao:,.2f}".replace(",","X").replace(".",",").replace("X",".")
+          elif modelo_comissao == "50% ao intermediador / 50% ao proprietário":
+              valor_comissao_str = "50% do 1º aluguel ao intermediador e 50% ao proprietário"
+              st.caption("50% intermediador / 50% proprietário")
+          else:
+              valor_comissao_str = "1º aluguel integral"
+              st.caption("100% do 1º aluguel ao intermediador")
+
+      st.markdown("---")
+      st.markdown("<div style='font-size:13px;font-weight:700;color:#6A1B9A;margin-bottom:8px;'>📋 Taxa de Administração (mensal)</div>", unsafe_allow_html=True)
+
+      tem_adm = st.checkbox("Há taxa de administração mensal?", key="tem_adm")
+      taxa_adm_str = ""
+      if tem_adm:
+          col_adm1, col_adm2 = st.columns(2)
+          with col_adm1:
+              pct_adm = st.number_input("Percentual de administração (%)", min_value=0.0, max_value=30.0, value=10.0, step=0.5, key="pct_adm")
+          with col_adm2:
+              base_adm = st.selectbox("Base de cálculo", ["Sobre o valor do aluguel","Sobre o valor total (aluguel + encargos)"], key="base_adm")
+          taxa_adm_str = f"{pct_adm}% ao mês — {base_adm.lower()}"
+          responsavel_adm = st.text_input("Responsável pela administração", value=st.session_state.get("nome_interm",""), key="responsavel_adm")
+          servicos_adm = st.multiselect("Serviços incluídos na administração", [
+              "Cobrança de aluguel","Repasse ao proprietário","Gestão de inadimplência",
+              "Vistoria periódica","Renovação contratual","Atendimento ao locatário",
+          ], default=["Cobrança de aluguel","Repasse ao proprietário"], key="servicos_adm")
+
+      st.markdown("---")
+      st.markdown("<div style='font-size:13px;font-weight:700;color:#6A1B9A;margin-bottom:8px;'>📅 Vigência da Intermediação</div>", unsafe_allow_html=True)
+
+      col_vig1, col_vig2 = st.columns(2)
+      with col_vig1:
+          vigencia_interm = st.selectbox("Vigência do mandato de administração", [
+              "Mesma vigência do contrato de locação",
+              "12 meses renovável",
+              "24 meses renovável",
+              "Indeterminada",
+          ], key="vigencia_interm")
+      with col_vig2:
+          aviso_interm = st.selectbox("Aviso prévio para rescisão da intermediação", [
+              "30 dias","60 dias","90 dias"
+          ], key="aviso_interm")
+
+      email_interm = st.text_input("E-mail do intermediador", placeholder="corretor@email.com", key="email_interm")
+
+      st.markdown("</div>", unsafe_allow_html=True)
+
+      interm_dados = {
+          "tipo":            tipo_interm,
+          "nome":            nome_interm,
+          "creci_cnpj":      creci_interm,
+          "cpf_cnpj":        cpf_cnpj_interm,
+          "telefone":        tel_interm,
+          "email":           email_interm,
+          "modelo_comissao": modelo_comissao,
+          "valor_comissao":  valor_comissao_str,
+          "tem_adm":         tem_adm,
+          "taxa_adm":        taxa_adm_str,
+          "servicos_adm":    servicos_adm if tem_adm else [],
+          "vigencia":        vigencia_interm,
+          "aviso_rescisao":  aviso_interm,
+      }
+
+  if not _vindo_do_quiz:
+      imovel_dados["intermediacao"] = interm_dados
+      st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+      processar_loc = st.button("⚡  ANALISAR DOCUMENTAÇÃO DO INQUILINO", type="primary", use_container_width=True, key="btn_processar_locacao")
+  # (se _vindo_do_quiz, processar_loc já foi definido como True e imovel_dados já está montado)
+
+  if processar_loc:
+    # ── Bloqueios obrigatórios ──
+    erros_bloqueio = []
+    if not upload_locador:
+        erros_bloqueio.append("📂 Envie os documentos do **LOCADOR** (Bloco 01)")
+    if not upload_locatario:
+        erros_bloqueio.append("📂 Envie os documentos do **LOCATÁRIO** (Bloco 02)")
+    if tem_fiador and not upload_fiador:
+        erros_bloqueio.append("📂 Garantia = Fiador: envie os documentos do **FIADOR** (Bloco 03)")
+    if finalidade_imovel and not imovel_dados.get("area"):
+        erros_bloqueio.append("📐 Informe a **área do imóvel** (obrigatória para a cláusula contratual)")
+
+    if erros_bloqueio:
+        for e in erros_bloqueio:
+            st.error(e)
+    else:
+        def bytes_polo(upload_list):
+            result = []
+            for arq in upload_list:
+                conteudo = arq.read()
+                tipo = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
+                result.append((arq.name, conteudo, tipo))
+            return result
+
+        barra = st.progress(0, text="⚡ Processando documentos...")
+        if _vindo_do_quiz:
+            _raw = st.session_state.get("quiz_todos_docs_bytes", [])
+            _lidos = [(d["name"], d["bytes"], "pdf" if d["name"].lower().endswith(".pdf") else "imagem") for d in _raw]
+            bytes_locador = bytes_locatario = _lidos
+            bytes_fiador  = _lidos if tem_fiador else []
+        else:
+            bytes_locador   = bytes_polo(upload_locador)
+            bytes_locatario = bytes_polo(upload_locatario)
+            bytes_fiador    = bytes_polo(upload_fiador) if upload_fiador else []
+
+        texto_loc_val = st.session_state.get("texto_locacao","")
+
+        # ── PROCESSAMENTO PARALELO — todas as chamadas à API ao mesmo tempo ──
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        resultados = {}
+        erros_thread = {}
+
+        def tarefa(nome, fn, *args):
+            try:
+                return nome, fn(*args), None
+            except Exception as e:
+                return nome, None, str(e)
+
+        _so_email_t = st.session_state.get("quiz_modo_servico","").startswith("email")
+        if _so_email_t:
+            tarefas = [
+                ("dados_locador",   extrair_dados_polo, bytes_locador,   "locador",   texto_loc_val),
+                ("dados_locatario", extrair_dados_polo, bytes_locatario, "locatario", texto_loc_val),
+            ]
+            if bytes_fiador:
+                tarefas.append(("dados_fiador", extrair_dados_polo, bytes_fiador, "fiador", texto_loc_val))
+        else:
+            tarefas = [
+                ("pdfs_locador",   processar_documentos, bytes_locador),
+                ("pdfs_locatario", processar_documentos, bytes_locatario),
+                ("dados_locador",  extrair_dados_polo,   bytes_locador,   "locador",   texto_loc_val),
+                ("dados_locatario",extrair_dados_polo,   bytes_locatario, "locatario", texto_loc_val),
+            ]
+            if bytes_fiador:
+                tarefas.append(("pdfs_fiador",  processar_documentos, bytes_fiador))
+                tarefas.append(("dados_fiador", extrair_dados_polo,   bytes_fiador, "fiador", texto_loc_val))
+
+        total = len(tarefas)
+        concluidas = 0
+        with ThreadPoolExecutor(max_workers=total) as executor:
+            futures = {executor.submit(tarefa, t[0], t[1], *t[2:]): t[0] for t in tarefas}
+            for future in as_completed(futures):
+                nome_t, resultado, erro = future.result()
+                concluidas += 1
+                pct = int((concluidas / total) * 80)
+                barra.progress(pct, text=f"⚡ Processando... {concluidas}/{total} tarefas concluídas")
+                if erro:
+                    erros_thread[nome_t] = erro
+                else:
+                    resultados[nome_t] = resultado
+
+        pdfs_locador   = resultados.get("pdfs_locador",   [])
+        pdfs_locatario = resultados.get("pdfs_locatario", [])
+        pdfs_fiador    = resultados.get("pdfs_fiador",    [])
+        dados_locador_ext   = resultados.get("dados_locador",   {})
+        dados_locatario_ext = resultados.get("dados_locatario", {})
+        dados_fiador_ext    = resultados.get("dados_fiador",    {}) if bytes_fiador else {}
+
+        # Extrair cidade/UF do imóvel a partir dos dados do locador (endereço do proprietário)
+        cidade_extraida = dados_locador_ext.get("cidade_imovel", "").strip()
+        uf_extraida     = dados_locador_ext.get("uf_imovel", "").strip()
+        if cidade_extraida and not imovel_dados.get("cidade"):
+            imovel_dados["cidade"] = cidade_extraida
+        if uf_extraida and not imovel_dados.get("uf"):
+            imovel_dados["uf"] = uf_extraida
+
+        # Mesclar campos manuais (email e telefone) — têm prioridade sobre os extraídos
+        def _mesclar_manual(dados, key_email, key_tel):
+            email_m = st.session_state.get(key_email, "").strip()
+            tel_m   = st.session_state.get(key_tel,   "").strip()
+            if email_m: dados["email"]    = email_m
+            if tel_m:   dados["telefone"] = tel_m
+            return dados
+
+        dados_locador_ext   = _mesclar_manual(dados_locador_ext,   "email_manual_locador",   "tel_manual_locador")
+        dados_locatario_ext = _mesclar_manual(dados_locatario_ext, "email_manual_locatario", "tel_manual_locatario")
+        if bytes_fiador:
+            dados_fiador_ext = _mesclar_manual(dados_fiador_ext,   "email_manual_fiador",    "tel_manual_fiador")
+
+        # Validações pós-extração — avisos, não bloqueios
+        avisos_dados = []
+        if not dados_locador_ext.get("cpf"):
+            avisos_dados.append("⚠️ CPF do **LOCADOR** não identificado automaticamente — verifique ou adicione no campo de texto")
+        if not dados_locatario_ext.get("cpf"):
+            avisos_dados.append("⚠️ CPF do **LOCATÁRIO** não identificado automaticamente — verifique ou adicione no campo de texto")
+        if not dados_locatario_ext.get("renda_valor"):
+            avisos_dados.append("⚠️ Renda do **LOCATÁRIO** não identificada — adicione no campo de texto (Ex: Renda R$3.200)")
+        if bytes_fiador and not dados_fiador_ext.get("cpf"):
+            avisos_dados.append("⚠️ CPF do **FIADOR** não identificado automaticamente — verifique ou adicione no campo de texto")
+
+        # Exibe avisos mas continua processamento sempre
+        for a in avisos_dados:
+            st.warning(a)
+
+        # Salvar previews para mini checklist
+        st.session_state["preview_locador"]   = dados_locador_ext
+        st.session_state["preview_locatario"] = dados_locatario_ext
+        st.session_state["preview_fiador"]    = dados_fiador_ext
+
+        # Dados consolidados do locatário (polo principal do email)
+        dados_loc = dados_locatario_ext.copy()
+        dados_loc["nome_destinatario"] = st.session_state.get("nome_dest_locacao","")
+
+        # Todos os PDFs combinados para download
+        pdfs_loc = pdfs_locador + pdfs_locatario + pdfs_fiador
+
+        _so_email = st.session_state.get("quiz_modo_servico","").startswith("email")
+        clausula_loc = ""
+        if not _so_email:
+            barra.progress(75, text="⚖️ Gerando cláusula contratual...")
+            if finalidade_imovel == "Residencial":
+                clausula_loc = gerar_clausula_residencial(imovel_dados)
+            elif finalidade_imovel == "Comercial":
+                clausula_loc = gerar_clausula_comercial(imovel_dados)
+
+        barra.progress(82, text="📷 Verificando fotos...")
+        termo_vistoria_bytes = None
+        fotos_nomes = []
+        if fotos_upload and not _so_email:
+            fotos_bytes_raw = []
+            for foto in fotos_upload:
+                conteudo_foto = foto.read()
+                fotos_bytes_raw.append((foto.name, conteudo_foto))
+                fotos_nomes.append(foto.name)
+            descricao_ia = analisar_fotos_vistoria(fotos_bytes_raw)
+            imovel_dados["vistoria_gerada"] = True
+            termo_vistoria_bytes = gerar_termo_vistoria_pdf(imovel_dados, descricao_ia, fotos_nomes)
+        else:
+            imovel_dados["vistoria_gerada"] = False
+
+        barra.progress(92, text="✍️ Gerando email profissional...")
+        email_loc = gerar_email_locacao(
+            dados_loc, pdfs_loc, imovel=imovel_dados,
+            dados_locador_direto=dados_locador_ext,
+            dados_locatario_direto=dados_locatario_ext,
+            dados_fiador_direto=dados_fiador_ext if bytes_fiador else {}
+        )
+        barra.progress(100, text="✅ Documentação pronta!")
+        time.sleep(0.4); barra.empty()
+
+        st.session_state["pdfs_gerados_loc"]    = pdfs_loc
+        st.session_state["pdfs_polo_locador"]   = pdfs_locador
+        st.session_state["pdfs_polo_locatario"] = pdfs_locatario
+        st.session_state["pdfs_polo_fiador"]    = pdfs_fiador
+        st.session_state["email_gerado_loc"]    = email_loc
+        st.session_state["dados_loc"]           = dados_loc
+        st.session_state["dados_locador"]       = dados_locador_ext
+        st.session_state["dados_locatario"]     = dados_locatario_ext
+        st.session_state["dados_fiador"]        = dados_fiador_ext
+        st.session_state["imovel_loc"]          = imovel_dados
+        st.session_state["clausula_loc"]        = clausula_loc
+        st.session_state["termo_vistoria_loc"]  = termo_vistoria_bytes
+        st.session_state["fotos_nomes_loc"]     = fotos_nomes
+        st.session_state["processado_loc"]      = True
+
+        # ── Score de risco (calcula em background, salva no session_state) ──
+        cliente_sess = st.session_state.get("cliente")
+        is_pro_score = cliente_sess.get("plano","free") in ("mensal","semestral","anual") if cliente_sess else False
+        if is_pro_score:
+            with st.spinner("📊 Calculando score de risco..."):
+                _score = calcular_score_risco(dados_locatario_ext, dados_fiador_ext if bytes_fiador else None, imovel_dados)
+                st.session_state["score_risco_loc"] = _score
+        else:
+            st.session_state["score_risco_loc"] = None
+
+        # ── Registrar no histórico ──
+        if cliente_sess:
+            total_arqs = len(bytes_locador) + len(bytes_locatario) + len(bytes_fiador)
+            registrar_uso(cliente_sess, qtd_arquivos=total_arqs)
+            _score_val = st.session_state.get("score_risco_loc",{})
+            _end_imovel = imovel_dados.get("logradouro","") or imovel_dados.get("endereco_completo","")
+            _hist_criado = __import__("datetime").datetime.now().isoformat()
+            st.session_state["hist_criado_em"] = _hist_criado
+            registrar_historico(
+                cliente_sess,
+                tipo="Locação",
+                nome_locatario=dados_locatario_ext.get("nome_completo",""),
+                nome_locador=dados_locador_ext.get("nome_completo",""),
+                score=_score_val.get("score") if _score_val else None,
+                status="Em andamento",
+                contrato_gerado=False,
+                email_enviado=False,
+                endereco_imovel=_end_imovel,
+                valor_aluguel=imovel_dados.get("valor_aluguel",""),
+            )
 
 # ── Barra discreta de conta (páginas de serviço) ──
 st.divider()
@@ -5043,7 +4645,7 @@ else:
             )
 
     with _clogout:
-        if st.button("🚪 Sair da conta", use_container_width=True, key="sair_rodape2"):
+        if st.button("🚪 Sair da conta", use_container_width=True, key="sair_rodape"):
             for k in ["autenticado","cliente","cfg_destino","cfg_remetente","cfg_senha",
                       "pdfs_gerados","email_gerado","processado","dados",
                       "pdfs_gerados_loc","email_gerado_loc","processado_loc","dados_loc","tipo_atendimento"]:
