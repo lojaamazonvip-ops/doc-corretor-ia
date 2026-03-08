@@ -3762,8 +3762,6 @@ elif tipo_atendimento == "locacao":
 
 
   if processar_loc:
-    # ── DEBUG temporário ──
-    st.info(f"🔍 DEBUG: modo={st.session_state.get('quiz_modo_servico')} | vindo_quiz={_vindo_do_quiz} | upload_loc={len(upload_locatario)} arquivos | imovel={list(imovel_dados.keys())[:4]}")
     # ── Bloqueios obrigatórios ──
     erros_bloqueio = []
     if not upload_locador:
@@ -3787,11 +3785,26 @@ elif tipo_atendimento == "locacao":
                 result.append((arq.name, conteudo, tipo))
             return result
 
-        barra = st.progress(0, text="⚡ Processando todos os documentos em paralelo...")
-        # Lê todos os bytes UMA vez — Streamlit não permite reler após read()
-        bytes_locador   = bytes_polo(upload_locador)
-        bytes_locatario = bytes_polo(upload_locatario)
-        bytes_fiador    = bytes_polo(upload_fiador) if upload_fiador else []
+        barra = st.progress(0, text="⚡ Processando documentos...")
+
+        # No modo quiz os bytes já estão salvos — não reler FakeFiles (read() só funciona uma vez)
+        if _vindo_do_quiz:
+            _raw = st.session_state.get("quiz_todos_docs_bytes", [])
+            _todos_lidos = [(d["name"], d["bytes"], "pdf" if d["name"].lower().endswith(".pdf") else "imagem") for d in _raw]
+            bytes_locador   = _todos_lidos
+            bytes_locatario = _todos_lidos
+            bytes_fiador    = _todos_lidos if tem_fiador else []
+        else:
+            def bytes_polo(upload_list):
+                result = []
+                for arq in upload_list:
+                    conteudo = arq.read()
+                    tipo = "pdf" if arq.name.lower().endswith('.pdf') else "imagem"
+                    result.append((arq.name, conteudo, tipo))
+                return result
+            bytes_locador   = bytes_polo(upload_locador)
+            bytes_locatario = bytes_polo(upload_locatario)
+            bytes_fiador    = bytes_polo(upload_fiador) if upload_fiador else []
 
         # Contexto de texto: quiz usa o campo de contexto do corretor; painel usa texto_locacao
         _ctx_quiz = st.session_state.get("quiz_texto_contexto", "")
