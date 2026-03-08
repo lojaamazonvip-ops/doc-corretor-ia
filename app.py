@@ -3762,6 +3762,8 @@ elif tipo_atendimento == "locacao":
 
 
   if processar_loc:
+    # ── DEBUG temporário ──
+    st.info(f"🔍 DEBUG: modo={st.session_state.get('quiz_modo_servico')} | vindo_quiz={_vindo_do_quiz} | upload_loc={len(upload_locatario)} arquivos | imovel={list(imovel_dados.keys())[:4]}")
     # ── Bloqueios obrigatórios ──
     erros_bloqueio = []
     if not upload_locador:
