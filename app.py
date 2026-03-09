@@ -933,7 +933,12 @@ def chamar_gemini(lista_parts):
 # BLOCO 2 — PROCESSAMENTO DE DOCUMENTOS
 # ══════════════════════════════════════════════════════
 
-def processar_documentos(arquivos_bytes):
+def processar_documentos(arquivos_bytes, contexto_polos=None):
+    """
+    contexto_polos: dict opcional {polo: nome_completo}
+    Ex: {"locatario": "Carmen Rejane Silva", "locador": "Annaic Huyara", "fiador": "José Santos"}
+    Quando fornecido, o sufixo _LOCATARIO / _LOCADOR / _FIADOR é adicionado ao nome do arquivo.
+    """
     pdfs_finais = []
     tmp = tempfile.mkdtemp()
 
@@ -946,15 +951,31 @@ def processar_documentos(arquivos_bytes):
     imgs  = [(n,c) for n,c,t in arquivos_bytes if t=="imagem"]
     pdfs  = [(n,c) for n,c,t in arquivos_bytes if t=="pdf"]
 
+    # Monta instrução de polo para o prompt
+    _polo_instrucao = ""
+    if contexto_polos:
+        linhas = []
+        for polo, nome in contexto_polos.items():
+            if nome:
+                sufixo = polo.upper()
+                linhas.append(f"  - Documentos de {nome} → sufixo _{sufixo} (ex: CNH_{nome.replace(' ','_').upper()}_{sufixo}.pdf)")
+        if linhas:
+            _polo_instrucao = (
+                "\n🏷️ SUFIXO DE POLO OBRIGATÓRIO — adicione ao final do nome:\n"
+                + "\n".join(linhas)
+                + "\n  - Se não souber a quem pertence → use _LOCATARIO\n"
+            )
+
     if pdfs:
         prompt = f"""
 Especialista em documentos imobiliários brasileiros.
 ⚠️ REGRAS: Leia completamente. NUNCA duplique. Cada arquivo em EXATAMENTE UM grupo. Use ID_ARQUIVO exato.
 📋 BANCO: {BANCO_STR}
 🔄 VERIFIQUE FRENTE/VERSO E UNA: {FRENTE_VERSO_STR}
-NOMENCLATURA: TipoDocumento_NomeCompleto_Detalhe
-Ex: RG_Maria_Silva | Extrato_Bancario_Nubank_Jan2026 | Certidao_Nascimento_Pedro_Lima
+NOMENCLATURA: TipoDocumento_NomeCompleto_Detalhe_POLO
+Ex: CNH_Carmen_Rejane_Silva_LOCATARIO | Holerite_Jose_Santos_FIADOR | RG_Annaic_Huyara_LOCADOR
 Frente+Verso=mesmo grupo | Holerites meses diferentes=separados | RG e CPF=sempre separados
+{_polo_instrucao}
 RETORNE JSON: {{"grupos":[{{"pdf_final":"Nome","arquivos":["arq.pdf"],"observacao":"motivo"}}]}}
 """
         try:
@@ -1010,7 +1031,9 @@ Especialista em documentos imobiliários. MÁXIMA PRECISÃO.
 ⚠️ NUNCA duplique. Cada imagem em EXATAMENTE UM grupo. Use ID_ARQUIVO exato.
 📋 BANCO: {BANCO_STR}
 🔄 FRENTE/VERSO — AGRUPE: {FRENTE_VERSO_STR}
-NOMENCLATURA: TipoDocumento_NomeCompleto_Detalhe
+NOMENCLATURA: TipoDocumento_NomeCompleto_Detalhe_POLO
+Ex: CNH_Carmen_Rejane_Silva_LOCATARIO | Holerite_Jose_Santos_FIADOR | RG_Annaic_Huyara_LOCADOR
+{_polo_instrucao}
 RETORNE JSON: {{"grupos":[{{"pdf":"Nome","arquivos":["arq.jpg"]}}]}}
 """
         try:
@@ -3029,24 +3052,23 @@ elif tipo_atendimento == "locacao":
 
         barra.progress(70, text="🔄 Convertendo e renomeando documentos...")
 
-        # ── Renomear + converter via IA, depois classificar por polo ──
-        docs_todos = processar_documentos(todos_bytes)  # [(nome_final, bytes_pdf)]
+        # ── Renomear + converter via IA com sufixo de polo ──
+        _ctx_polos = {
+            "locatario": dados_loct.get("nome_completo", ""),
+            "locador":   dados_locd.get("nome_completo", ""),
+        }
+        if tem_fiador_ea and dados_fiad.get("nome_completo"):
+            _ctx_polos["fiador"] = dados_fiad["nome_completo"]
 
-        # Primeiro nome de cada polo para classificar os docs renomeados
-        _nome_loct_norm = (dados_loct.get("nome_completo") or "").split()[0].lower()
-        _nome_locd_norm = (dados_locd.get("nome_completo") or "").split()[0].lower()
-        _nome_fiad_norm = (dados_fiad.get("nome_completo") or "").split()[0].lower()
+        docs_todos = processar_documentos(todos_bytes, contexto_polos=_ctx_polos)
 
-        def _polo_do_nome(nome_doc):
-            n = nome_doc.lower()
-            if _nome_locd_norm and _nome_locd_norm in n: return "locador"
-            if _nome_fiad_norm and _nome_fiad_norm in n: return "fiador"
-            if _nome_loct_norm and _nome_loct_norm in n: return "locatario"
-            return "locatario"  # default: locatário
-
+        # Classificar por sufixo _LOCATARIO / _LOCADOR / _FIADOR no nome
         docs_por_polo = {"locador": [], "locatario": [], "fiador": []}
         for _nd, _bd in docs_todos:
-            docs_por_polo[_polo_do_nome(_nd)].append((_nd, _bd))
+            _nu = _nd.upper()
+            if "_LOCADOR" in _nu:   docs_por_polo["locador"].append((_nd, _bd))
+            elif "_FIADOR" in _nu:  docs_por_polo["fiador"].append((_nd, _bd))
+            else:                   docs_por_polo["locatario"].append((_nd, _bd))
 
         docs_processados = docs_todos  # lista flat para anexo no email
 
